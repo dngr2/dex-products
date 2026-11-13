@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<!--
+  G2-b — SUBSCRIPTION / recurring toll. ONE static file. NO server, NO build step, NO third-party deps,
+  NO CDN. Hand-rolled ABI encode/decode over raw eth_call, matching the fleet's house style
+  (p3-router/frontend, g2b-escrow/frontend, g3a-sponsorship/frontend carry the same convention).
+
+  WHAT THE PRODUCT IS: a subscription is a STANDING, SELF-RE-FUNDED STREAM. One ERC20 `approve` by the
+  payer IS the mandate; a keeper then calls the ALREADY-DEPLOYED `createStreamFor(payer, …)` once per
+  period, funded from that allowance. No new contract, no new deploy, no new fee model — "the deploy is
+  a config, not a contract." The page proves that against LIVE BYTECODE, not against a doc.
+
+  THE WHOLE POINT OF THIS PAGE: make the mechanism LEGIBLE AND HONEST — including the two things it
+  CANNOT do, which a card-network mental model would get wrong:
+    * NATIVE has no allowance. An ERC20 period pulls from the payer; a NATIVE period floats the KEEPER,
+      because `transferFrom` is an ERC20 concept. (Honest limit, not a defect.)
+    * The chain CANNOT charge a wallet that walked away. Every period is a FRESH vault funded at
+      creation. A missed period is a HOLE, not a DEBT — no on-chain dunning, no retry, no proration.
+
+  HONESTY RULES THIS PAGE FOLLOWS (same as p3-router):
+   1. Every number is READ LIVE. The page never prints a fee or a balance it did not read this load.
+   2. A dead RPC renders "unreachable", NEVER a silent 0 or a false "ok" (GOTCHAS #147/#112) — a
+      transport fault is its OWN state, distinct from a contract that answered the wrong thing.
+   3. Addresses are COPIED from files (GOTCHAS #73): factory + USDC + treasury from g2a-streams/
+      KEY-RECORD.md; the two live period-vaults from this lane's live-fire receipts. verify.mjs re-reads
+      the KEY-RECORD and asserts this page matches it byte-for-byte.
+   4. The selectors are DERIVED by an in-page keccak, then asserted == `cast sig` in verify.mjs — never
+      hand-typed (GOTCHAS #5).
+
+  WHAT THE PAGE SHOWS AS "THE MECHANISM RAN": the two REAL vaults fired by this lane's live run
+  (0x3ab2F248…, 0x7eddafb1…). They share payer/recipient/token/amount and carry BACK-TO-BACK windows
+  [start,end] 120s apart — a recurring toll, literally, readable on-chain.
+
+  ROUTE: single view. `?rpc=<url>` overrides the Base RPC.
+-->
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>G2-b subscription — a recurring toll, proved live</title>
+<style>
+  /* palette UNIFIED with the landing (dex-site/index.html) so the whole site reads as one system */
+  :root { --bg:#05080f; --fg:#e9eefb; --mut:#8fa0be; --card:#0b1222; --line:#18233a;
+          --acc:#4d94ff; --ok:#34d399; --warn:#fbbf24; --bad:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .wrap { max-width:820px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:18px; margin:0 0 4px; letter-spacing:.5px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--mut);
+       margin:0 0 12px; font-weight:400; }
+  .sub { color:var(--mut); font-size:13px; margin-bottom:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin:14px 0; }
+  .big { font-size:30px; font-weight:700; margin:6px 0; }
+  .addr { overflow-wrap:anywhere; background:#0e1116; border:1px solid var(--line);
+          border-radius:8px; padding:12px; margin-top:6px; font-size:13px; }
+  .badge { display:inline-block; font-size:11px; padding:3px 8px; border-radius:999px;
+           border:1px solid var(--line); color:var(--mut); }
+  .badge.ok { color:var(--ok); border-color:var(--ok); }
+  .badge.warn { color:var(--warn); border-color:var(--warn); }
+  .badge.bad { color:var(--bad); border-color:var(--bad); }
+  a { color:var(--acc); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .mut { color:var(--mut); font-size:13px; }
+  /* error/problem lines embed a bare 42-char address in prose ("owner() 0x… ≠ treasury"). At 13px
+     monospace that token is wider than a phone column, so it must break. This only bites when the
+     read SUCCEEDS and a problem is raised — so a sweep on a run where the read faulted misses it. */
+  .err { color:var(--warn); overflow-wrap:anywhere; }
+  .pos { color:var(--ok); }
+  .neg { color:var(--bad); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th { text-align:left; color:var(--mut); font-weight:400; font-size:11px; text-transform:uppercase;
+       letter-spacing:.5px; padding:6px; border-bottom:1px solid var(--line); }
+  td { text-align:left; padding:7px 6px; border-bottom:1px solid #191d24; overflow-wrap:anywhere; }
+  td.k { color:var(--mut); width:40%; }
+  pre { background:#0e1116; border:1px solid var(--line); border-radius:8px; padding:12px;
+        overflow-x:auto; font-size:12px; }
+  .kv { display:grid; grid-template-columns:190px minmax(0,1fr); gap:4px 12px; font-size:13px; }
+  .kv .k { color:var(--mut); }
+  .steps li { margin:8px 0; }
+  .steps code { background:#0e1116; border:1px solid var(--line); border-radius:6px; padding:1px 6px; }
+  .imposs { border-left:3px solid var(--warn); padding-left:12px; margin:14px 0; }
+  .trap { border-left:3px solid var(--bad); padding-left:12px; margin:14px 0; }
+</style>
+<link rel="stylesheet" href="../_assets/theme.css">
+<link rel="icon" type="image/svg+xml" href="../_assets/favicon.svg">
+</head>
+<body>
+<!-- dx-chrome --><style>
+/* dx-chrome — shared, namespaced. Injected by chrome.py; do not hand-edit in built files. */
+.dx-top{position:relative;z-index:50;background:rgba(5,8,15,.72);backdrop-filter:blur(8px);border-bottom:1px solid #18233a}
+.dx-top-in{max-width:900px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px}
+.dx-home{display:inline-flex;align-items:center;gap:7px;font:600 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color:#e9eefb;text-decoration:none;padding:6px 2px}
+.dx-home:hover{color:#4d94ff}
+.dx-home .dx-arrow{color:#4d94ff}
+.dx-tag{font:500 12.5px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be;margin-left:auto}
+.dx-foot{position:relative;z-index:50;margin-top:56px;border-top:1px solid #18233a;background:rgba(5,8,15,.72)}
+.dx-foot-in{max-width:900px;margin:0 auto;padding:24px 20px 40px}
+.dx-foot-brand{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+.dx-foot-brand a{font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;text-decoration:none}
+.dx-foot-brand a:hover{color:#4d94ff}
+.dx-foot-brand span{font:500 12.5px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be}
+.dx-foot-nav{display:flex;gap:9px;flex-wrap:wrap}
+.dx-foot-nav a{font:600 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;
+  text-decoration:none;background:rgba(255,255,255,.04);border:1px solid #18233a;border-radius:999px;padding:7px 13px}
+.dx-foot-nav a:hover{border-color:#4d94ff;color:#4d94ff}
+@media(max-width:600px){.dx-tag{display:none}}
+</style>
+<div class="dx-top">
+  <div class="dx-top-in">
+    <a class="dx-home" href="../index.html"><span class="dx-arrow">←</span> DEX fleet</a>
+    <span class="dx-tag">non-custodial rails on Base</span>
+  </div>
+</div>
+<div class="wrap">
+  <div class="row" style="justify-content:space-between;margin-bottom:20px">
+    <span><b>G2-b</b> <span class="mut">→ subscription / recurring toll</span></span>
+    <span class="mut" id="chainbadge">…</span>
+  </div>
+  <div id="app">loading…</div>
+  <p class="mut" style="margin-top:40px">
+    static page · reads Base directly · no server, no account, no cookies ·
+    zero new on-chain code · the mandate is one <code>approve</code>
+  </p>
+</div>
+
+<!-- ── inline QR ─────────────────────────────────────────────────────────────────────
+     Byte-mode, ECC-L, versions 1–10, ZERO deps. The matrices are bit-exact against a
+     reference encoder (143 cases: forced masks, all versions, 120-payload fuzz) and
+     independently decode-verified (rendered → PNG → decoded). Renders to <canvas>.
+     Usage:  qrHTML(text, px)  -> canvas markup;  call drawQRs() after inserting it.
+──────────────────────────────────────────────────────────────────────────────────── -->
+<script src="../_assets/lib.js"></script>
+<script>
+(function (G) {
+  "use strict";
+  // GF(256), primitive 0x11d — Reed–Solomon over the QR field
+  var EXP = new Array(256), LOG = new Array(256);
+  (function () { var x = 1; for (var i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 0x100) x ^= 0x11d; } EXP[255] = EXP[0]; })();
+  function gmul(a, b) { return (a === 0 || b === 0) ? 0 : EXP[(LOG[a] + LOG[b]) % 255]; }
+  function rsGen(n) { var p = [1]; for (var i = 0; i < n; i++) { var r = new Array(p.length + 1).fill(0); for (var j = 0; j < p.length; j++) { r[j] ^= gmul(p[j], 1); r[j + 1] ^= gmul(p[j], EXP[i]); } p = r; } return p; }
+  function rsEcc(data, n) { var gen = rsGen(n), res = data.concat(new Array(n).fill(0)); for (var i = 0; i < data.length; i++) { var c = res[i]; if (c !== 0) for (var j = 1; j < gen.length; j++) res[i + j] ^= gmul(gen[j], c); } return res.slice(data.length); }
+
+  // per-version Reed–Solomon block structure, ECC-L only: [count, totalCw, dataCw]
+  var RS = { 1: [[1, 26, 19]], 2: [[1, 44, 34]], 3: [[1, 70, 55]], 4: [[1, 100, 80]], 5: [[1, 134, 108]],
+    6: [[2, 86, 68]], 7: [[2, 98, 78]], 8: [[2, 121, 97]], 9: [[2, 146, 116]], 10: [[2, 86, 68], [2, 87, 69]] };
+  var ALIGN = { 1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34], 7: [6, 22, 38], 8: [6, 24, 42], 9: [6, 26, 46], 10: [6, 28, 50] };
+  function dataCw(v) { var n = 0; RS[v].forEach(function (b) { n += b[0] * b[2]; }); return n; }
+  function byteCap(v) { return Math.floor((dataCw(v) * 8 - 4 - (v < 10 ? 8 : 16)) / 8); }
+
+  function bchDigit(x) { var d = 0; while (x !== 0) { d++; x >>>= 1; } return d; }
+  function formatBits(ecl, mask) { var data = (ecl << 3) | mask, d = data << 10; while (bchDigit(d) - bchDigit(0x537) >= 0) d ^= 0x537 << (bchDigit(d) - bchDigit(0x537)); return ((data << 10) | d) ^ 0x5412; }
+  function versionBits(v) { var d = v << 12; while (bchDigit(d) - bchDigit(0x1f25) >= 0) d ^= 0x1f25 << (bchDigit(d) - bchDigit(0x1f25)); return (v << 12) | d; }
+
+  function chooseVersion(n) { for (var v = 1; v <= 10; v++) if (n <= byteCap(v)) return v; throw new Error("qr: too long (" + n + " bytes)"); }
+
+  function codewords(text, version) {
+    var bytes = Array.prototype.slice.call(new TextEncoder().encode(text)), bits = [];
+    function put(val, len) { for (var i = len - 1; i >= 0; i--) bits.push((val >>> i) & 1); }
+    put(4, 4); put(bytes.length, version < 10 ? 8 : 16); bytes.forEach(function (c) { put(c, 8); });
+    var total = dataCw(version), cap = total * 8;
+    for (var i = 0; i < 4 && bits.length < cap; i++) bits.push(0);
+    while (bits.length % 8 !== 0) bits.push(0);
+    var data = []; for (var k = 0; k < bits.length; k += 8) { var x = 0; for (var j = 0; j < 8; j++) x = (x << 1) | bits[k + j]; data.push(x); }
+    var pad = [0xEC, 0x11], pi = 0; while (data.length < total) data.push(pad[pi++ % 2]);
+    var blocks = [], off = 0;
+    RS[version].forEach(function (blk) { for (var i = 0; i < blk[0]; i++) { var dd = data.slice(off, off + blk[2]); off += blk[2]; blocks.push({ d: dd, e: rsEcc(dd, blk[1] - blk[2]) }); } });
+    var out = [], maxD = Math.max.apply(null, blocks.map(function (b) { return b.d.length; }));
+    for (var i2 = 0; i2 < maxD; i2++) blocks.forEach(function (b) { if (i2 < b.d.length) out.push(b.d[i2]); });
+    var maxE = Math.max.apply(null, blocks.map(function (b) { return b.e.length; }));
+    for (var i3 = 0; i3 < maxE; i3++) blocks.forEach(function (b) { if (i3 < b.e.length) out.push(b.e[i3]); });
+    return out;
+  }
+
+  function blank(s) { var m = []; for (var i = 0; i < s; i++) m.push(new Array(s).fill(null)); return m; }
+  function finder(m, r, c) { for (var dr = -1; dr <= 7; dr++) for (var dc = -1; dc <= 7; dc++) { var rr = r + dr, cc = c + dc; if (rr < 0 || cc < 0 || rr >= m.length || cc >= m.length) continue; var on = (dr >= 0 && dr <= 6 && (dc === 0 || dc === 6)) || (dc >= 0 && dc <= 6 && (dr === 0 || dr === 6)) || (dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4); m[rr][cc] = on ? 1 : 0; } }
+  function align(m, cx, cy) { for (var dr = -2; dr <= 2; dr++) for (var dc = -2; dc <= 2; dc++) m[cy + dr][cx + dc] = (Math.max(Math.abs(dr), Math.abs(dc)) !== 1) ? 1 : 0; }
+  function reserved(s, version) {
+    var rm = blank(s).map(function (r) { return r.map(function () { return false; }); });
+    function mark(r, c, dim) { for (var dr = 0; dr < dim; dr++) for (var dc = 0; dc < dim; dc++) { var rr = r + dr, cc = c + dc; if (rr >= 0 && cc >= 0 && rr < s && cc < s) rm[rr][cc] = true; } }
+    mark(-1, -1, 9); mark(-1, s - 8, 9); mark(s - 8, -1, 9);
+    for (var i = 0; i < s; i++) { rm[6][i] = true; rm[i][6] = true; }
+    ALIGN[version].forEach(function (cy) { ALIGN[version].forEach(function (cx) { if ((cx === 6 && cy === 6) || (cx === 6 && cy === s - 7) || (cx === s - 7 && cy === 6)) return; mark(cy - 2, cx - 2, 5); }); });
+    for (var a = 0; a < 9; a++) { rm[8][a] = true; rm[a][8] = true; }
+    for (var b = 0; b < 8; b++) { rm[8][s - 1 - b] = true; rm[s - 1 - b][8] = true; }
+    rm[s - 8][8] = true;
+    if (version >= 7) for (var p = 0; p < 6; p++) for (var q = 0; q < 3; q++) { rm[s - 11 + q][p] = true; rm[p][s - 11 + q] = true; }
+    return rm;
+  }
+  function functions(m, version) {
+    var s = m.length;
+    finder(m, 0, 0); finder(m, 0, s - 7); finder(m, s - 7, 0);
+    for (var i = 8; i < s - 8; i++) { if (m[6][i] === null) m[6][i] = i % 2 === 0 ? 1 : 0; if (m[i][6] === null) m[i][6] = i % 2 === 0 ? 1 : 0; }
+    ALIGN[version].forEach(function (cy) { ALIGN[version].forEach(function (cx) { if ((cx === 6 && cy === 6) || (cx === 6 && cy === s - 7) || (cx === s - 7 && cy === 6)) return; align(m, cx, cy); }); });
+    for (var a = 0; a < 9; a++) { if (m[8][a] === null) m[8][a] = 0; if (m[a][8] === null) m[a][8] = 0; }
+    for (var b = 0; b < 8; b++) { if (m[8][s - 1 - b] === null) m[8][s - 1 - b] = 0; if (m[s - 1 - b][8] === null) m[s - 1 - b][8] = 0; }
+    m[s - 8][8] = 1;
+    if (version >= 7) { var vb = versionBits(version); for (var k = 0; k < 18; k++) { var bit = (vb >>> k) & 1, aa = Math.floor(k / 3), bb = k % 3; m[s - 11 + bb][aa] = bit; m[aa][s - 11 + bb] = bit; } }
+  }
+  function placeData(m, cw) {
+    var s = m.length, dir = -1, row = s - 1, col = s - 1, idx = 0, total = cw.length * 8;
+    function bitAt(i) { return i < total ? (cw[i >> 3] >>> (7 - (i & 7))) & 1 : 0; }
+    for (; col > 0; col -= 2) {
+      if (col === 6) col--;
+      for (;;) {
+        for (var c = 0; c < 2; c++) { var cc = col - c; if (m[row][cc] === null) m[row][cc] = bitAt(idx++); }
+        row += dir; if (row < 0 || row >= s) { row -= dir; dir = -dir; break; }
+      }
+    }
+  }
+  function maskFn(mask, r, c) {
+    switch (mask) {
+      case 0: return (r + c) % 2 === 0; case 1: return r % 2 === 0; case 2: return c % 3 === 0;
+      case 3: return (r + c) % 3 === 0; case 4: return (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0;
+      case 5: return ((r * c) % 2 + (r * c) % 3) === 0; case 6: return (((r * c) % 2 + (r * c) % 3) % 2) === 0;
+      case 7: return (((r + c) % 2 + (r * c) % 3) % 2) === 0;
+    }
+  }
+  function applyMask(m, mask, version) { var s = m.length, rm = reserved(s, version); for (var r = 0; r < s; r++) for (var c = 0; c < s; c++) if (!rm[r][c] && maskFn(mask, r, c)) m[r][c] ^= 1; }
+  function putFormat(m, ecl, mask) {
+    var s = m.length, bits = formatBits(ecl, mask); function bit(i) { return (bits >>> i) & 1; }
+    for (var i = 0; i <= 5; i++) m[i][8] = bit(i);
+    m[7][8] = bit(6); m[8][8] = bit(7); m[8][7] = bit(8);
+    for (var k = 9; k < 15; k++) m[8][14 - k] = bit(k);
+    for (var a = 0; a < 8; a++) m[8][s - 1 - a] = bit(a);
+    for (var b = 8; b < 15; b++) m[s - 15 + b][8] = bit(b);
+    m[s - 8][8] = 1;
+  }
+  // ISO/IEC 18004 mask penalty; lowest score wins (matches the reference encoder exactly)
+  function penalty(m) {
+    var s = m.length, p = 0, cont = new Array(s + 1).fill(0);
+    for (var r = 0; r < s; r++) { var prev = m[r][0], len = 0; for (var c = 0; c < s; c++) { if (m[r][c] === prev) len++; else { if (len >= 5) cont[len]++; len = 1; prev = m[r][c]; } } if (len >= 5) cont[len]++; }
+    for (var c2 = 0; c2 < s; c2++) { var pv = m[0][c2], ln = 0; for (var r2 = 0; r2 < s; r2++) { if (m[r2][c2] === pv) ln++; else { if (ln >= 5) cont[ln]++; ln = 1; pv = m[r2][c2]; } } if (ln >= 5) cont[ln]++; }
+    for (var l = 5; l <= s; l++) p += cont[l] * (l - 2);
+    for (var r3 = 0; r3 < s - 1; r3++) { var c3 = 0; while (c3 < s - 1) { var tr = m[r3][c3 + 1]; if (tr !== m[r3 + 1][c3 + 1]) { c3 += 2; continue; } if (tr !== m[r3][c3]) { c3 += 1; continue; } if (tr !== m[r3 + 1][c3]) { c3 += 1; continue; } p += 3; c3 += 1; } }
+    function L3(get) { var cnt = 0; for (var i = 0; i < s - 10; i++) { var o1 = !get(i + 1) && get(i + 4) && !get(i + 5) && get(i + 6) && !get(i + 9) && get(i) && get(i + 2) && get(i + 3) && !get(i + 7) && !get(i + 8) && !get(i + 10); var o2 = !get(i + 1) && get(i + 4) && !get(i + 5) && get(i + 6) && !get(i + 9) && !get(i) && !get(i + 2) && !get(i + 3) && get(i + 7) && get(i + 8) && get(i + 10); if (o1 || o2) { cnt++; if (get(i + 10)) i++; } } return cnt; }
+    for (var r4 = 0; r4 < s; r4++) p += 40 * L3(function (i) { return m[r4][i]; });
+    for (var c4 = 0; c4 < s; c4++) p += 40 * L3(function (i) { return m[i][c4]; });
+    var dark = 0; for (var r5 = 0; r5 < s; r5++) for (var c5 = 0; c5 < s; c5++) dark += m[r5][c5];
+    p += Math.floor(Math.abs(dark * 100 / (s * s) - 50) / 5) * 10;
+    return p;
+  }
+  function scoreMatrix(s, v, cw, mask) {
+    var m = blank(s); functions(m, v); placeData(m, cw); applyMask(m, mask, v); putFormat(m, 1, mask);
+    // reference scores in "test" mode: format/version/dark modules are zero while scoring
+    for (var i = 0; i <= 5; i++) m[i][8] = 0; m[7][8] = 0; m[8][8] = 0; m[8][7] = 0;
+    for (var k = 9; k < 15; k++) m[8][14 - k] = 0;
+    for (var a = 0; a < 8; a++) m[8][s - 1 - a] = 0;
+    for (var b = 8; b < 15; b++) m[s - 15 + b][8] = 0;
+    m[s - 8][8] = 0;
+    if (v >= 7) for (var p = 0; p < 6; p++) for (var q = 0; q < 3; q++) { m[s - 11 + q][p] = 0; m[p][s - 11 + q] = 0; }
+    return m;
+  }
+  function encode(text) {
+    var v = chooseVersion(Array.prototype.slice.call(new TextEncoder().encode(text)).length);
+    var cw = codewords(text, v), s = 4 * v + 17, best = 0, bestPen = Infinity;
+    for (var mk = 0; mk < 8; mk++) { var pen = penalty(scoreMatrix(s, v, cw, mk)); if (pen < bestPen) { bestPen = pen; best = mk; } }
+    var m = blank(s); functions(m, v); placeData(m, cw); applyMask(m, best, v); putFormat(m, 1, best);
+    return { size: s, version: v, matrix: m };
+  }
+
+  function escA(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
+  G.qrHTML = function (text, px) {
+    px = px || 200;
+    return '<canvas class="qr" data-qr="' + escA(text) + '" data-px="' + px +
+      '" style="width:' + px + 'px;height:' + px + 'px;background:#fff;border-radius:8px"></canvas>';
+  };
+  G.drawQRs = function (root) {
+    var nodes = (root || document).querySelectorAll("canvas[data-qr]:not([data-done])");
+    Array.prototype.forEach.call(nodes, function (cv) {
+      var text = cv.getAttribute("data-qr"), px = parseInt(cv.getAttribute("data-px") || "200", 10);
+      try {
+        var r = encode(text), s = r.size, quiet = 4, total = s + quiet * 2;
+        // size the BACKING STORE in whole device pixels so each module is an exact integer
+        // number of them — a 4px/module code scans; a fractional 3.4px one can fail at 1x.
+        var dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 4);
+        var scale = Math.max(2, Math.floor((px * dpr) / total));
+        var size = scale * total;
+        cv.width = size; cv.height = size;
+        var g = cv.getContext("2d");
+        g.fillStyle = "#fff"; g.fillRect(0, 0, size, size);
+        g.fillStyle = "#000";
+        for (var y = 0; y < s; y++) for (var x = 0; x < s; x++) if (r.matrix[y][x]) g.fillRect((x + quiet) * scale, (y + quiet) * scale, scale, scale);
+        cv.setAttribute("data-done", "1");
+      } catch (e) { cv.setAttribute("title", "qr: " + e.message); }
+    });
+  };
+})(window);
+</script>
+<script>
+"use strict";
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+
+
+// =============================== config =========================================================
+const PARAMS = new URLSearchParams(location.search);
+
+// Addresses COPIED from files (GOTCHAS #73), never retyped from memory:
+//   factory + USDC + treasury  <- g2a-streams/KEY-RECORD.md (StreamFactory Base, verified on-chain)
+//   the two period-vaults      <- this lane's live-fire receipts (EVIDENCE-subscription.md §addendum)
+const FACTORY  = "0x3882A049ee99B96Ea68DF317713ed76008b9A075";   // G2-a StreamFactory v2.1 (Base), LIVE
+// The vaults this page proves were fired BEFORE the v2.1 dead-drop fix, so their immutable factory() is
+// v1 forever — repointing them is impossible (factory() is baked in at CREATE). v1 is frozen+PAUSED.
+// So "is a real vault of this lineage" must accept a known-historic PRODUCER, not only the current address.
+// v1 = the ONLY producer of the live-fire vaults below: all three read factory()==v1 live (2 RPCs), and
+// v1.streamCount(payer) is 1 while v2 and the relaunch factory read 0. Runtime 9,385 B, keccak
+// 0x6dfe06ec… (≠ FACTORY's 16,643 B / 0xa4798afc…), so it is a genuine older contract, not a copy.
+const FACTORY_HISTORIC = ["0x2bB5b763a8A85e446909674177e65cb6F1052b4F"];
+const USDC     = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";   // Base USDC
+const TREASURY = "0x5c0fc0917260A0656D253f1625053e3E6Dd2Ef3c";   // feeRecipient == factory owner (orphan)
+// the two REAL periods this lane fired (blk 54447571 / 54447594), back-to-back 120s windows.
+const LIVE_PERIODS = [
+  "0x3ab2F248D88d29f30D9541eDAeC0Ac421Be5d210",
+  "0x7eddafb1308B053ef2f13ae4594E1F471a19cbaA",
+];
+// a SECOND run (the "seed") after the owner's setFeeBps(100): 3 more back-to-back 90s windows, so the
+// page shows BOTH the mechanism repeating AND the fee being read live at whatever it is NOW. These were
+// fired at 100 bps; the two above at 25 bps. Same factory, byte-identical code — only storage changed.
+const SEED_PERIODS = [
+  "0x65Ce4d1D9C01Bd61E6D0c6E1f2c416eF3C614922",
+  "0xa44De045Df417F077836df8d6dAc91d9cc23dBF6",
+  "0x9a5076A9B3D300Cb740cD2cBA058D4227f0AE0F3",
+];
+const PAYER   = "0xa3a2b2E9e474F98bC13109F89411c0f4E2E78611";   // subscriber (standing allowance)
+const MERCHANT= "0x27339Dd87d6A22414b79Dc7966526906bfBe92C2";   // recipient
+
+// Base RPC. mainnet.base.org 429s getLogs on this box, so default to publicnode (same hosts p3 uses).
+const RPC = PARAMS.get("rpc") || "https://base-rpc.publicnode.com";
+// ENDPOINT-POLICY: base.llamarpc.com DROPPED (HTTP 525, text/plain body, no ACAO -> res.json() throws);
+// mainnet.base.org demoted to last (25 req/s soft-limit, 429s -32007 under boot fan-out); drpc is the
+// call-capable alt. Order matters: a dead terminal alt is only fatal if every earlier slot also fails.
+const RPC_ALTS = ["https://base.drpc.org", "https://mainnet.base.org"];
+const CHAIN_ID = 8453;
+
+// the fee is NOT a page constant: it is read live from factory.feeBps(). It is ALSO MUTABLE — the owner
+// can (and did, mid-session 2026-11-08) call `setFeeBps`, so a drift from the historical 25 is
+// INFORMATION, not a mismatch. FEE_BPS_EXPECTED is only the value the FIRST live run paid; the identity
+// proof rests on the IMMUTABLE facts (code, owner, feeRecipient, MAX_FEE_BPS, MIN_DURATION), never on
+// the mutable fee. See the "fee is mutable" note rendered below when live != expected.
+const FEE_BPS_EXPECTED = 25n;   // the value the FIRST live run paid — HISTORY, for the timeline note only
+const FEE_BPS_CURRENT  = 500n;  // current live value; used ONLY as the RPC-down fallback (live read wins)
+const PERIOD_SECONDS = 120;      // the live windows are 120s apart (see the fire script)
+// $5.00 per period, NOT $0.50. The earlier 0.50 USDC demo was GAS-NEGATIVE: a lap (createStreamFor
+// + withdraw + forward) costs ~$0.0155 of gas, and even at 500 bps a period only tolls 0.50*0.05 = $0.025
+// — a third of the gas. $5 tolls $0.05, ~3.2x above the floor. This is the live fire's amount.
+const PERIOD_AMOUNT  = 5000000n;  // 5.00 USDC (6dp) per period
+
+// Selectors: DERIVED below by the in-page keccak, then asserted == `cast sig` in verify.mjs.
+// The literals here are the checked-in expectation; the page uses the DERIVED value at runtime.
+const SIGS = {
+  feeBps: "feeBps()",
+  feeRecipient: "feeRecipient()",
+  paused: "paused()",
+  owner: "owner()",
+  maxFeeBps: "MAX_FEE_BPS()",
+  minDuration: "MIN_DURATION()",
+  createStreamFor: "createStreamFor(address,address,address,uint256,uint64,uint64)",
+  createStream: "createStream(address,address,uint256,uint64,uint64)",
+  predict: "predict(address,address,address,uint256,uint64,uint64)",
+  balanceOf: "balanceOf(address)",
+  allowance: "allowance(address,address)",
+  approve: "approve(address,uint256)",
+  transferFrom: "transferFrom(address,address,uint256)",
+  withdraw: "withdraw()",
+  cancel: "cancel()",
+  withdrawable: "withdrawable()",
+  payer: "payer()",
+  recipient: "recipient()",
+  token: "token()",
+  amount: "amount()",
+  start: "start()",
+  end: "end()",
+  factory: "factory()",
+  withdrawn: "withdrawn()",
+  canceled: "canceled()",
+};
+
+// =============================== codec ==========================================================
+const word = (h) => String(h).padStart(64, "0");
+const pad32 = (v) => word(BigInt(v).toString(16));
+const addr32 = (a) => word(a.toLowerCase().replace(/^0x/, ""));
+const isAddr = (a) => /^0x[0-9a-fA-F]{40}$/.test(a || "");
+const short = (a) => (a ? a.slice(0, 6) + "…" + a.slice(-4) : "");
+const hexToBig = (h) => BigInt(h && h !== "0x" ? h : "0x0");
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+// A copyable/scan-able absolute link that also works from file:// (where location.origin is "null").
+const absLink = (hash) => {
+  const base = location.origin === "null" ? location.href.replace(/[#?].*$/, "") : location.origin + location.pathname;
+  return base + hash;
+};
+// USDC has 6 decimals; a human amount like 0.50 is 500000 base units.
+const fmt6 = (n) => { const s = (Number(n) / 1e6).toFixed(6).replace(/0+$/, "").replace(/\.$/, ""); return s === "" ? "0" : s; };
+const decodeUint = (h) => hexToBig(h).toString();
+const decodeAddr = (h) => "0x" + String(h).slice(-40);
+const wantAddr = (h, a) => decodeAddr(h).toLowerCase() === a.toLowerCase();
+
+// ---- keccak256 (Ethereum) in pure JS — VERIFIED against cast keccak for len 0..600 -------------
+// rate 136, pad 0x01..0x80 (Keccak, NOT SHA3). Used to DERIVE the selectors, never to type them.
+
+const utf8Hex = (s) => bytesToHex(new TextEncoder().encode(s));
+const sig = (s) => keccak256(utf8Hex(s)).slice(0, 10);   // 4-byte selector from the signature
+
+// derive every selector from its signature — SEL is the runtime truth, SIGS is the checked-in map.
+const SEL = {};
+for (const [k, s] of Object.entries(SIGS)) SEL[k] = sig(s);
+
+// the fee, mirroring the vault EXACTLY: floor(amount * bps / 10000), taken ON WITHDRAWAL.
+function feeOn(amount, feeBps) { return (BigInt(amount) * BigInt(feeBps)) / 10000n; }
+
+// encoders for the reads the page issues
+const encBalanceOf = (a) => SEL.balanceOf + addr32(a);
+const encAllowance = (from, spender) => SEL.allowance + addr32(from) + addr32(spender);
+
+// =============================== rpc ============================================================
+const app = typeof document !== "undefined" ? document.getElementById("app") : null;
+
+async function rpcOn(url, method, params, tries = 3) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await _fetchT(url, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      });
+      // 429 = the endpoint is ALIVE, asking us to slow down. It carries no result, so this attempt
+      // still fails and retries — but it must not be mistaken for a dead transport.
+      if (r.status === 429) throw new Error("rpc 429 (rate limited)");
+      const j = await r.json();
+      if (j.error) throw new Error(j.error.message || "rpc error");
+      if (j.result === undefined) throw new Error(j.message || `rpc ${r.status} (no result)`);
+      return j.result;
+    } catch (e) {
+      last = e;
+      // A REVERT is a real, final answer (GOTCHA #147). Retrying it on the same url re-asks the chain
+      // the same question — the impostor row alone re-proved the same revert three times.
+      if (/revert/i.test(String((e && e.message) || e))) throw e;
+      if (i < tries - 1) await new Promise((s) => setTimeout(s, 400 * (i + 1)));
+    }
+  }
+  throw last;
+}
+const chainIdOf = async (url) => Number(BigInt(await rpcOn(url, "eth_chainId", [])));
+
+// A probe returns one of FOUR DISTINCT statuses (GOTCHAS #147): 'ok' (answered), 'wrong' (answered
+// something else), 'reverted' (eth_call reverted — still a real answer), 'unreachable' (transport
+// fault). A blip must NEVER read as 'wrong', and a revert must NEVER retry as 'unreachable'.
+// ONE attempt: rpcOn already retries the same url, so an outer retry here re-walks those tries a second
+// time (and a revert, being a real answer, is re-asked three times for nothing).
+async function probeCall(url, to, data) {
+  try {
+    return { status: "ok", value: await rpcOn(url, "eth_call", [{ to, data }, "latest"]) };
+  } catch (e) {
+    const m = String((e && e.message) || e);
+    if (/revert/i.test(m)) return { status: "reverted", value: null };
+    return { status: "unreachable", value: null, err: m };
+  }
+}
+
+// A bounded runner: run N thunks with at most `limit` in flight, preserving RESULT ORDER. Public Base
+// RPCs rate-limit a burst, so the boot's top-level Promise.all (proveFactory + 5 period reads + 3
+// probeCalls, each of which is itself sequential) would put ~9 simultaneous requests on ONE endpoint
+// and trip a 429 — which, with no request timeout, reads as a stall. Chunk to 3: same results, same
+// order, materially smaller burst. (Return shapes are untouched — a chunked read is byte-identical.)
+async function runLimited(thunks, limit = 3) {
+  const out = new Array(thunks.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < thunks.length) { const i = next++; out[i] = await thunks[i](); }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, thunks.length) }, worker));
+  return out;
+}
+
+// pick ONE working endpoint for the whole page (a mixed-url proof is weaker), asserting chainId.
+// The PRIMARY candidate is tried alone first with one short attempt, so a healthy ?rpc= override still
+// wins; only if it fails do the alternates race concurrently. A serial walk pays the full per-attempt
+// timeout on every dead candidate — with the default 8s timeout and 3 tries each, a black-holed ?rpc=
+// held the boot spinner ~55s before it would give up. This settles in ~1s when healthy, ~5s+1s when
+// the override is dead, and marks unreachable instead of spinning when nothing answers.
+async function pickEndpoint() {
+  const probe = async (cand) => {
+    const r = await _fetchT(cand, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+    }, 5000);
+    if (r.status === 429) throw new Error("rpc 429 (rate limited)");   // alive, just busy
+    const j = await r.json();
+    if (j.error) throw new Error(j.error.message || "rpc error");
+    const c = Number(BigInt(j.result));
+    if (c !== CHAIN_ID) throw new Error(`chainId ${c} ≠ ${CHAIN_ID}`);
+    return { url: cand, cid: c };
+  };
+  // the alts are a FIXED list: a candidate that fails here is race-lost, not dead, so a 429 on it is
+  // re-raced in the next round rather than removed. (Streams carries a DEAD set because its order
+  // includes the black-hole override; here pickEndpoint pins one url and never walks again.)
+  let lastErr = null;
+  try { return await probe(RPC); } catch (e) { lastErr = String((e && e.message) || e); }
+  // the primary failed — race the alts, one re-probe round for a blip
+  for (let round = 0; round < 2; round++) {
+    try { return await Promise.any(RPC_ALTS.map(probe)); }
+    catch (e) { if (e && e.errors) lastErr = e.errors.map(String).join("; "); }
+  }
+  return { url: null, cid: null, err: lastErr || "unreachable" };
+}
+
+// =============================== the proof ======================================================
+// Read the factory's OWN surface live. A "proved" factory must answer feeBps==25, feeRecipient==owner
+// ==treasury (the params KEY-RECORD recorded), paused==false, MAX_FEE_BPS==500, MIN_DURATION==60. Any
+// disagreement is 'wrong'; any transport fault is 'unreachable' (never silently folded into 'proved').
+async function proveFactory(url, addr = FACTORY) {
+  const r = {};
+  for (const k of ["feeBps", "feeRecipient", "paused", "owner", "maxFeeBps", "minDuration"]) {
+    r[k] = await probeCall(url, addr, SEL[k]);
+  }
+  if (Object.values(r).some((x) => x.status === "unreachable")) {
+    return { verdict: "unreachable", feeBps: "—", feeRecipientLive: null, ownerLive: null, paused: null,
+             problems: ["factory probe unreachable"] };
+  }
+  const problems = [];
+  let wrong = false;
+  const num = (k) => (r[k].status === "ok" ? hexToBig(r[k].value) : null);
+  // feeBps is MUTABLE (owner can setFeeBps) — a drift is NOT "wrong", it is the live truth. Identity
+  // rests on the IMMUTABLE surface: code (checked via selectors), owner, feeRecipient, MAX_FEE_BPS,
+  // MIN_DURATION. Only a "fee changed" note is emitted, never a failure.
+  const feeDrift = num("feeBps") !== FEE_BPS_EXPECTED;
+  if (num("maxFeeBps") !== 500n) { wrong = true; problems.push(`MAX_FEE_BPS() ≠ 500 (the ceiling, ≠ the divisor)`); }
+  if (num("minDuration") !== 60n) { wrong = true; problems.push(`MIN_DURATION() ≠ 60`); }
+  if (r.paused.status === "ok" && hexToBig(r.paused.value) !== 0n) { wrong = true; problems.push("paused() is TRUE"); }
+  const fr = r.feeRecipient.status === "ok" ? decodeAddr(r.feeRecipient.value) : null;
+  const ow = r.owner.status === "ok" ? decodeAddr(r.owner.value) : null;
+  if (fr && !wantAddr(fr, TREASURY)) { wrong = true; problems.push(`feeRecipient() ${fr} ≠ treasury`); }
+  if (ow && !wantAddr(ow, TREASURY)) { wrong = true; problems.push(`owner() ${ow} ≠ treasury`); }
+  return {
+    verdict: wrong ? "wrong" : "proved", problems,
+    feeBps: num("feeBps") != null ? num("feeBps").toString() : "—",
+    feeDrift,
+    feeRecipientLive: fr, ownerLive: ow,
+    paused: r.paused.status === "ok" ? (hexToBig(r.paused.value) !== 0n) : null,   // the ACTUAL paused flag
+  };
+}
+
+// Read ONE live period-vault and confirm it is a real G2-a vault produced by THIS lineage: it has code,
+// its factory() back-points to a real StreamFactory (the live one OR a known-historic one — see
+// FACTORY_HISTORIC: the vaults predate the v2.1 dead-drop fix, so their immutable factory() is v1 forever),
+// and its immutable window is sane (end>start, ≥60s). This is the on-chain evidence that "the mechanism ran".
+async function readPeriod(url, vault) {
+  const code = await rpcOn(url, "eth_getCode", [vault, "latest"]).catch(() => null);
+  const codeBytes = code ? (code.length - 2) / 2 : 0;
+  const p = {};
+  for (const k of ["factory", "payer", "recipient", "token", "amount", "start", "end", "withdrawn", "canceled"]) {
+    p[k] = await probeCall(url, vault, SEL[k]);
+  }
+  const g = (k) => (p[k] && p[k].status === "ok" ? hexToBig(p[k].value) : null);
+  const fOk = p.factory.status === "ok";
+  const fIsCurrent = fOk && wantAddr(p.factory.value, FACTORY);
+  const fIsHistoric = fOk && FACTORY_HISTORIC.some((a) => wantAddr(p.factory.value, a));
+  const backPoints = fIsCurrent || fIsHistoric;
+  return {
+    vault, codeBytes,
+    isContract: codeBytes > 0,
+    backPoints,
+    fIsCurrent, fIsHistoric, fValue: fOk ? decodeAddr(p.factory.value) : null,
+    payer: p.payer.status === "ok" ? decodeAddr(p.payer.value) : null,
+    recipient: p.recipient.status === "ok" ? decodeAddr(p.recipient.value) : null,
+    amount: g("amount"),
+    start: g("start"), end: g("end"),
+    withdrawn: g("withdrawn"),
+    body: p.amount.status === "unreachable" ? "unreachable" : "ok",
+  };
+}
+
+// =============================== render =========================================================
+function badge(v) { return v === "proved" ? "ok" : v === "unreachable" ? "warn" : "bad"; }
+
+async function viewHome() {
+  if (!app) return;
+  app.innerHTML = `<div class='card'>reading Base…</div>`;
+
+  const ep = await pickEndpoint();
+  if (!ep.url) {
+    app.innerHTML = `<div class="card"><h1>G2-b subscription</h1>
+      <div class="row"><span class="badge warn">unreachable</span>
+      <span class="mut">no Base endpoint answered with the right chainId — this is an honest
+      "couldn't read", NOT a zero. (${esc(ep.err || "")})</span></div></div>`;
+    return;
+  }
+  if (typeof document !== "undefined" && document.getElementById("chainbadge")) {
+    document.getElementById("chainbadge").textContent = "base · " + CHAIN_ID;
+  }
+
+  // BOUNDED boot: ONE flat pool of leaf tasks, 3 in flight (not ~9 at once — 9 simultaneous requests to
+  // one public endpoint is what trips the 429 that, absent a fetch timeout, reads as a hang). Flattening
+  // (rather than nesting runLimited) matters: nested pools compound, so the peak was still 6. Leaf units
+  // are proveFactory, each readPeriod, each balance probe; results keep source order.
+  const urls = [...LIVE_PERIODS, ...SEED_PERIODS];
+  const flat = await runLimited([
+    () => proveFactory(ep.url),
+    ...urls.map((v) => () => readPeriod(ep.url, v)),
+    () => probeCall(ep.url, USDC, encBalanceOf(PAYER)).catch(() => ({ status: "unreachable" })),
+    () => probeCall(ep.url, USDC, encBalanceOf(MERCHANT)).catch(() => ({ status: "unreachable" })),
+    () => probeCall(ep.url, USDC, encAllowance(PAYER, FACTORY)).catch(() => ({ status: "unreachable" })),
+  ], 3);
+  const factory = flat[0], periods = flat.slice(1, 1 + LIVE_PERIODS.length),
+        seedPeriods = flat.slice(1 + LIVE_PERIODS.length, 1 + urls.length);
+  const [payerBal, merchantBal, allowance] = flat.slice(1 + urls.length);
+
+  const feeBpsLive = factory.verdict === "proved" ? BigInt(factory.feeBps) : FEE_BPS_CURRENT;
+  const perPeriod = PERIOD_AMOUNT, feePer = feeOn(perPeriod, feeBpsLive);
+
+  // every period vault (both runs) must share identity and back-point; the two RUN-1 windows must be
+  // contiguous, AND the three seed windows must TILE with no gap (sorted by start, each next window
+  // begins at or before the previous one ends — a real recurring coverage, at least one pair exact).
+  const allPeriods = [...periods, ...seedPeriods];
+  const [pA, pB] = periods;
+  const backToBack = !!(pA.end != null && pB.start != null && pA.end === pB.start);
+  const seedOrdered = [...seedPeriods].sort((x, y) => Number(x.start - y.start));
+  const seedNoGap = seedOrdered.every((p) => p.start != null && p.end != null) &&
+    seedOrdered.every((p, i) => i === 0 || seedOrdered[i - 1].end >= p.start);
+  const seedChained = seedOrdered.some((p, i) => i > 0 && seedOrdered[i - 1].end === p.start);
+  const seedBackToBack = seedNoGap && seedChained;
+  const identities = allPeriods.every((p) => p.payer) &&
+    allPeriods.every((p) => p.payer.toLowerCase() === allPeriods[0].payer.toLowerCase()) &&
+    allPeriods.every((p) => p.recipient) &&
+    allPeriods.every((p) => p.recipient.toLowerCase() === allPeriods[0].recipient.toLowerCase());
+  const allReal = allPeriods.every((p) => p.isContract && p.backPoints);
+  const recurrenceProved = backToBack && seedBackToBack && identities && allReal;
+
+  // one row per vault: window, amount, drained, code. `note` is the run label / bps it settled at.
+  const renderPeriodRows = (list, note) => list.map((p) => `<tr>
+      <td class="addr" style="font-size:12px;padding:4px 6px">${esc(p.vault)}<br><span class="mut">${esc(note)}</span></td>
+      <td>${p.start != null && p.end != null ? `${esc(p.start.toString())} → ${esc(p.end.toString())} <span class="mut">(${esc((Number(p.end - p.start)) + " s")})</span>` : "<span class='err'>unreachable</span>"}</td>
+      <td>${p.amount != null ? esc(fmt6(p.amount)) + " USDC" : "—"}</td>
+      <td>${p.withdrawn != null ? esc(fmt6(p.withdrawn)) + " USDC <span class='pos'>drained</span>" : "—"}</td>
+      <td>${p.isContract ? esc(p.codeBytes + " B") + (p.fIsCurrent ? " <span class='pos'>↩ factory</span>" : p.fIsHistoric ? " <span class='pos'>↩ factory (v1, historic)</span>" : "") : "<span class='err'>no code</span>"}</td>
+    </tr>`).join("");
+
+  const fBadge = badge(factory.verdict);
+  const bal = (x) => (x && x.status === "ok" ? fmt6(hexToBig(x.value)) + " USDC" : "<span class='err'>unreachable</span>");
+
+  app.innerHTML = `
+    <h1>G2-b subscription</h1>
+    <div class="sub">a subscription is a <b>standing, self-re-funded stream</b>. one ERC20
+      <code>approve</code> by the payer <i>is</i> the mandate; a keeper calls the already-deployed
+      <code>createStreamFor(payer, …)</code> once per period, funded from that allowance.
+      <b>zero new on-chain code</b> — the "deploy" is a config.</div>
+
+    <div class="card">
+      <div class="row"><b>the live factory</b>
+        <span class="badge ${fBadge}">${factory.verdict}</span>
+        <span class="mut">read this load, not from a doc</span></div>
+      <div class="addr">${esc(FACTORY)}</div>
+      <div class="kv" style="margin-top:12px">
+        <div class="k">feeBps() (live)</div><div>${factory.verdict === "proved"
+          ? `<b class="pos">${esc(factory.feeBps)}</b> bps${factory.feeDrift ? ` <span class="badge warn">drifted from ${esc(FEE_BPS_EXPECTED.toString())}</span> <span class="mut">— feeBps is MUTABLE (owner calls setFeeBps); identity rests on the immutable facts, not this number</span>` : ` <span class="mut">— a fixed number this load</span>`}`
+          : `<span class="err">${esc(factory.feeBps)}</span>`}</div>
+        <div class="k">feeRecipient() (live)</div><div class="addr" style="font-size:12px;padding:4px 8px">${factory.feeRecipientLive ? esc(factory.feeRecipientLive) : "—"}</div>
+        <div class="k">owner() (live)</div><div class="mut">${factory.ownerLive ? esc(short(factory.ownerLive)) : "—"} — treasury, same key</div>
+        <div class="k">paused() (live)</div><div>${factory.paused === false ? "false <span class='pos'>ok</span>" : esc(String(factory.paused))}</div>
+        <div class="k">MAX_FEE_BPS / MIN_DURATION</div><div class="mut">500 (a <b>ceiling</b>, not the divisor) · 60 s</div>
+      </div>
+      ${factory.problems.length ? `<p class="err" style="margin:10px 0 0">${factory.problems.map(esc).join(" · ")}</p>` : ""}
+      <p class="mut" style="margin-top:10px">The factory is <b>unmodified</b>: the recurring primitive is
+        its own <code>createStreamFor(payer, …)</code> (${esc(SEL.createStreamFor)}) pulling from the payer
+        via <code>transferFrom</code> (${esc(SEL.transferFrom)}). Both selectors are <b>derived here</b>,
+        not typed.</p>
+    </div>
+
+    <div class="card">
+      <h2>the mechanism — three steps, one of which repeats</h2>
+      <ol class="steps">
+        <li><b>payer</b> (once): <code>approve(factory, N × periodAmount)</code> — <b>this is the
+          mandate.</b> One tx, or <code>type(uint256).max</code> for open-ended.</li>
+        <li><b>keeper</b> (each period): <code>createStreamFor(payer, merchant, USDC, amount, now,
+          now+period)</code> — the <b>only</b> recurring call. No per-period payer signature, no
+          per-period payer gas.</li>
+        <li><b>anyone</b> (permissionless): <code>withdraw()</code> vests to the merchant by the second;
+          the factory's live <code>feeBps()</code> is taken on withdrawal, to the treasury (500 bps since
+          the 2026-11-08 re-rate; the run-1 rows below predate it and paid 25, the seed at 100).</li>
+      </ol>
+      <p class="mut">A "period" is <i>exactly one vault</i> with its own immutable <code>[start,end]</code>
+        window. There is no period state on-chain — <b>the period IS the window.</b></p>
+    </div>
+
+    <div class="card">
+      <h2>the mechanism RAN — ${esc(String(allPeriods.length))} live periods, whole windows, drained</h2>
+      <div class="row"><span class="badge ${recurrenceProved ? "ok" : "warn"}">${recurrenceProved ? "recurrence proved" : "checking"}</span>
+        <span class="mut">real vaults from this lane's live run — every one shares payer/recipient/amount,
+        carries ONE window, and back-points to a real factory of this lineage (a historic v1 vault is
+        tagged <b>↩ factory (v1, historic)</b>; the vaults predate the v2.1 fix so v1 is baked in)</span></div>
+      <table style="margin-top:12px">
+        <tr><th>period vault</th><th>window [start,end]</th><th>amount</th><th>withdrawn</th><th>code</th></tr>
+        ${renderPeriodRows(periods, "run 1 · 25 bps")}
+        <tr><td colspan="5" class="mut" style="padding-top:10px">— the owner then called <code>setFeeBps(100)</code>;
+          the same mechanism re-ran, byte-identical factory —</td></tr>
+        ${renderPeriodRows(seedPeriods, "seed · 100 bps")}
+      </table>
+      <p class="mut" style="margin-top:10px">${backToBack
+        ? "run-1 period A's <b>end</b> == period B's <b>start</b>; the seed's three windows tile with <b>no gap</b> (and one pair is exact) — the recurring toll is literal, readable on-chain, not asserted."
+        : "windows not currently contiguous (a re-read may be needed)."}</p>
+    </div>
+
+    <div class="card">
+      <h2>the fee — read live, one event per settlement</h2>
+      <div class="big">${esc(feeBpsLive.toString())} bps</div>
+      <div class="mut">on the vault's existing <code>feeBps()</code>, taken <b>on withdrawal</b>, to the
+        treasury. A subscription adds <b>no second fee model</b>.</div>
+      ${factory.feeDrift ? `<p class="mut" style="margin:8px 0 0"><span class="badge warn">mutable</span>
+        the owner can — and did — change <code>feeBps</code>: this lane's first live run settled at
+        <b>${esc(FEE_BPS_EXPECTED.toString())} bps</b>, the seed run after the owner's <code>setFeeBps</code>
+        settled at <b>${esc(feeBpsLive.toString())} bps</b>. Both are the SAME factory (byte-identical
+        code). So the fee here is the live number, and the subscription must quote it live too.</p>` : ""}
+      <table style="margin-top:12px">
+        <tr><th>per period</th><th>value</th></tr>
+        <tr><td class="k">amount</td><td>${esc(fmt6(perPeriod))} USDC</td></tr>
+        <tr><td class="k">fee (floor(amount×${esc(feeBpsLive.toString())}/10000))</td><td>${esc(fmt6(feePer))} USDC</td></tr>
+        <tr><td class="k">merchant receives</td><td>${esc(fmt6(perPeriod - feePer))} USDC</td></tr>
+      </table>
+      <p class="mut" style="margin:8px 0 0">floor note: a lap costs ~$0.0155 gas; at the live
+        ${esc(feeBpsLive.toString())} bps a period must be ≥ ~$${(0.0155 * 10000 / Number(feeBpsLive)).toFixed(2)}
+        or the toll does not clear the gas (this demo is $5, well above the floor).</p>
+      <div class="trap">
+        <b>the stacking trap — ONE line.</b> If a period's payout is routed through a pay-link
+        <b>Forwarder</b> deposit address, the fee is charged <b>twice</b> — once on the vault's
+        withdrawal and again on the Forwarder's own sweep — because the Forwarder is a separate contract
+        with its own fee. <b>Default: pay the merchant's EOA directly for ONE fee event.</b>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>what it CANNOT do — stated, not implied</h2>
+      <div class="imposs">
+        <b>Native (ETH) has no allowance.</b> <code>transferFrom</code> is an ERC20 concept, so a native
+        period cannot pull from the payer — it must float the <b>keeper's</b> own balance. ERC20 = the
+        payer is charged from their allowance; native = the keeper fronts it and is repaid out-of-band.
+      </div>
+      <div class="imposs">
+        <b>The chain cannot charge a wallet that walked away.</b> Every period is a fresh vault funded at
+        creation. A missed period is a <b>HOLE, not a DEBT</b> — no on-chain dunning, no retry, no
+        proration. If the payer's allowance or balance is empty at period N, period N simply does not
+        create. Do <i>not</i> imply card-network semantics.
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>addresses (copied from files, GOTCHA #73)</h2>
+      <div class="kv">
+        <div class="k">factory (Base)</div><div class="addr" style="font-size:12px;padding:6px 8px">${esc(FACTORY)}</div>
+        <div class="k">USDC (Base)</div><div class="addr" style="font-size:12px;padding:6px 8px">${esc(USDC)}</div>
+        <div class="k">treasury / feeRecipient</div><div class="addr" style="font-size:12px;padding:6px 8px">${esc(TREASURY)}</div>
+      </div>
+      <p class="mut" style="margin-top:10px">The factory, USDC and treasury are copied verbatim from
+        <code>g2a-streams/KEY-RECORD.md</code>; the two period-vaults above are from this lane's live-fire
+        receipts. <code>verify.mjs</code> re-reads the KEY-RECORD and asserts this page matches it
+        byte-for-byte.</p>
+      <p class="mut" style="margin-top:10px"><b>Two verbs.</b> The <b>factory</b> is a <b>pull</b> target —
+        <code>approve</code> it, <b>don't</b> <code>transfer</code> to it (it funds by
+        <code>createStreamFor</code>→<code>transferFrom</code>; a bare transfer does not pay a lap). This
+        factory (v2.1) <i>accepts</i> a bare transfer and the owner can <code>rescue()</code> it — the older
+        one stranded it with no rescue. <b>Treasury</b> is a plain wallet — <code>transfer</code> there is fine.</p>
+    </div>
+
+    <div class="card">
+      <h2>live balances (context)</h2>
+      <div class="kv">
+        <div class="k">payer USDC</div><div>${bal(payerBal)}</div>
+        <div class="k">merchant USDC</div><div>${bal(merchantBal)}</div>
+        <div class="k">payer → factory allowance</div><div>${bal(allowance)}</div>
+      </div>
+      <p class="mut" style="margin-top:10px">The payer's allowance to the factory is the mandate; it is
+        re-read live because it is the one number a subscriber controls directly.</p>
+    </div>
+
+    <div class="card">
+      <h2>hand this to a payer — scan or send</h2>
+      <p class="mut">The page itself is the handover: open it on a phone, or send the link. The payer
+        reads the SAME live factory and allowance, then does the one <code>approve</code> that is the
+        mandate. A QR is a link a merchant can show in person — no typing a 42-char address.
+        <b>If a payer scans and then <i>sends</i> instead of approving, the USDC does not pay a lap</b>
+        — the right verb is approve. (v2.1 accepts the mis-send and the owner can rescue it; the old factory
+        stranded it.)</p>
+      <div class="row" style="gap:18px;align-items:flex-start;margin-top:12px">
+        <div><div class="mut" style="margin-bottom:6px">scan to open this page</div>${qrHTML(absLink(""), 200)}</div>
+        <div><div class="mut" style="margin-bottom:6px">factory address — <b>approve</b>, not transfer</div>${qrHTML(FACTORY.toLowerCase(), 200)}</div>
+      </div>
+      <p class="mut" style="margin-top:10px">link: <span class="addr" style="display:inline;padding:2px 6px">${esc(absLink(""))}</span></p>
+    </div>
+
+    <p class="mut">factory ${esc(short(FACTORY))} · USDC ${esc(short(USDC))} ·
+      selectors derived in-page · read-only, no wallet.</p>
+  `;
+  drawQRs(app);   // paint the hand-off QRs (inline encoder lives in the block above)
+}
+
+if (typeof window !== "undefined") window.__g2b = { SIGS, SEL, FACTORY, USDC, TREASURY, LIVE_PERIODS, SEED_PERIODS, CHAIN_ID, PROVIDER: RPC };
+
+// expose the codec + config + proof fns for verify.mjs (a `new Function` scope hides const bindings
+// from globalThis, so the names the harness needs are re-published here — the same seam p3-router uses).
+if (typeof globalThis !== "undefined") Object.assign(globalThis, {
+  SIGS, SEL, FACTORY, FACTORY_HISTORIC, USDC, TREASURY, LIVE_PERIODS, SEED_PERIODS, PAYER, MERCHANT, CHAIN_ID,
+  FEE_BPS_EXPECTED, PERIOD_SECONDS, PERIOD_AMOUNT,
+  keccak256, utf8Hex, sig, feeOn, probeCall, proveFactory, readPeriod, encBalanceOf, encAllowance, viewHome,
+  runLimited,
+});
+
+if (typeof document !== "undefined") viewHome();
+</script>
+
+<div class="dx-foot">
+  <div class="dx-foot-in">
+    <div class="dx-foot-brand"><a href="../index.html">← DEX fleet</a>
+      <span>truth-only · every number read on-chain</span></div>
+    <nav class="dx-foot-nav" aria-label="All pages"><a href="../subscribe/index.html">Subscriptions</a><a href="../merchant/index.html">For merchants</a><a href="../g2b-escrow/index.html">Escrow</a><a href="../g2a-streams/index.html">Streams</a><a href="../f1a-payment-links/index.html">Payment links</a><a href="../p2-forwarder/index.html">Forwarder</a><a href="../p3-router/index.html">Swap router</a><a href="../g4b-receipts/index.html">Receipts</a><a href="../g3a-sponsorship/index.html">Gasless</a><a href="../f1c-duster/index.html">Dust → USDC</a><a href="../miniapp/index.html">Pay in-feed</a><a href="../fleet-executor/index.html">Executor</a><a href="../status/index.html">Status</a><a href="../security/index.html">Security</a><a href="../changelog/index.html">Changelog</a></nav>
+  </div>
+</div>
+<!-- dx-timelock:start -->
+<div class="dx-timelock" id="dxTimelock" style="display:none;max-width:720px;margin:14px auto 0;padding:9px 12px;border:1px solid var(--line,#2a3550);border-radius:8px;font-size:12.5px;color:var(--mut,#8fa0be)"></div>
+<script>
+"use strict";
+(function () {
+  var el = document.getElementById("dxTimelock"); if (!el) return;
+  var ADDR = "0x3882A049ee99B96Ea68DF317713ed76008b9A075", BAKED = 172800, RPC = "https://base-rpc.publicnode.com";
+  var SEL = "0x7aadef8b";
+  function hum(s) { var d = s / 86400; return (d % 1 === 0) ? (d + " day" + (d > 1 ? "s" : "")) : Math.round(s / 3600) + "h"; }
+  function paint(sec, live) {
+    if (!sec) return;
+    el.innerHTML = "<b>a fee change is STAGED, not instant</b> — the owner's raise or recipient change "
+      + "waits <b>" + hum(sec) + "</b> (the contract's TIMELOCK) before it can be committed"
+      + (live ? " — read live on-chain" : " — TIMELOCK " + hum(BAKED) + " baked, RPC unreachable") + ".";
+    el.style.display = "";
+  }
+  paint(BAKED, false);
+  try {
+    var ac = new AbortController(); var to = setTimeout(function () { ac.abort(); }, 8000);
+    fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, signal: ac.signal,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: ADDR, data: SEL }, "latest"] }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (j && j.result) paint(parseInt(j.result.slice(-16), 16), true); })
+      .catch(function () {})
+      .finally(function () { clearTimeout(to); });
+  } catch (e) {}
+})();
+</script>
+<!-- dx-timelock:end -->
+</body>
+</html>

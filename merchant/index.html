@@ -1,0 +1,516 @@
+<!doctype html>
+<html data-theme="light" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pay a stranger safely — the money waits until the deal is done</title>
+<meta name="theme-color" content="#1f6feb">
+<link rel="icon" type="image/svg+xml" href="../_assets/favicon.svg">
+<meta name="description" content="Lock money against a condition, auto-refund on timeout, one link, no signup — and an agent can pay with no account. Or charge the same small amount again and again: flat 5%, read live on-chain, versus a card's 2.9% + 30¢.">
+<meta property="og:type" content="website">
+<!-- absolute URLs: social crawlers (Farcaster/Twitter) do not resolve relative og:image paths -->
+<meta property="og:url" content="https://dngr2.github.io/dex-products/merchant/">
+<meta property="og:site_name" content="DEX fleet">
+<meta property="og:title" content="Pay a stranger safely — the money waits until the deal is done.">
+<meta property="og:description" content="Locked until the condition is met, auto-refund if it never is. One link, no signup. Or charge $2 a month without a card eating 36¢.">
+<meta property="og:image" content="https://dngr2.github.io/dex-products/subscribe/_assets/og-card-ai.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Pay a stranger safely — the money waits until the deal is done.">
+<meta name="twitter:description" content="Locked until the condition is met, auto-refund if it never is. One link, no signup.">
+<meta name="twitter:image" content="https://dngr2.github.io/dex-products/subscribe/_assets/og-card-ai.jpg">
+<style>
+  :root{
+    --fg:#0f172a; --mut:#64748b; --bg:#f8fafc; --card:#fff; --line:#e2e8f0;
+    --acc:#1f6feb; --acc-soft:rgba(31,111,235,.07); --acc-line:rgba(31,111,235,.35);
+    --ok:#0f9d58; --warn:#b45309; --bad:#b91c1c; --chip:#f1f5f9;
+    --r:14px; --r-sm:10px;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:16px/1.6 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+       font-feature-settings:"tnum" 1}
+  .wrap{max-width:760px;margin:0 auto;padding:0 20px 72px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.94em}
+  a{color:var(--acc)}
+
+  .nav{display:flex;align-items:center;gap:18px;padding:16px 0;flex-wrap:wrap}
+  .navlinks{display:flex;gap:18px;font-size:14px}
+  .navlinks a{color:var(--mut);text-decoration:none;font-weight:600}
+  .navlinks a:hover{color:var(--fg)}
+
+  .hero{padding:28px 0 8px;border-top:1px solid var(--line);margin-top:8px}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;
+          color:var(--mut);text-transform:uppercase;letter-spacing:.07em;margin-bottom:16px}
+  .kicker .dot{width:8px;height:8px;border-radius:50%;background:var(--mut);flex:0 0 auto}
+  .kicker .dot.ok{background:var(--ok);box-shadow:0 0 0 4px rgba(15,157,88,.13)}
+  .kicker .dot.bad{background:var(--bad);box-shadow:0 0 0 4px rgba(185,28,28,.13)}
+  h1{margin:0;font-size:clamp(28px,5.6vw,42px);line-height:1.1;letter-spacing:-.028em;font-weight:800}
+  h1 em{font-style:normal;color:var(--acc)}
+  .lede{margin:18px 0 0;font-size:clamp(16px,2.3vw,18.5px);line-height:1.58;color:#334155;max-width:620px}
+  .lede b{color:var(--fg);font-weight:650}
+
+  .ctas{display:flex;gap:12px;flex-wrap:wrap;margin:28px 0 0}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:13px 20px;border-radius:var(--r-sm);
+       font-size:15.5px;font-weight:700;text-decoration:none;border:1px solid transparent;
+       transition:transform .06s ease, background .15s ease}
+  .btn:active{transform:translateY(1px)}
+  .btn-p{background:var(--acc);color:#fff;box-shadow:0 1px 2px rgba(31,111,235,.3)}
+  .btn-p:hover{background:#1a5fcc}
+  .btn-s{background:#fff;color:var(--fg);border-color:var(--line)}
+  .btn-s:hover{border-color:#cbd5e1;background:#fbfdff}
+  .btn-note{font-size:13px;color:var(--mut);align-self:center;margin-left:2px}
+
+  .trust{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);
+         border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin:40px 0 0}
+  .trust .t{background:var(--card);padding:16px 18px}
+  .trust .th{font-size:11.5px;font-weight:750;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin-bottom:7px}
+  .trust .tv{font-size:14.5px;font-weight:600;line-height:1.45}
+  .trust .tv .big{font-size:19px;font-weight:800;letter-spacing:-.01em}
+  .trust .tv .sub{display:block;font-size:12.5px;font-weight:500;color:var(--mut);margin-top:4px}
+  .trust a{font-weight:650;text-decoration:none}
+  .trust a:hover{text-decoration:underline}
+  .state-ok{color:var(--ok)} .state-bad{color:var(--bad)}
+
+  /* verified line — a calm trust signal under the trust row, not a badge wall */
+  .verif{font-size:12.5px;color:var(--mut);line-height:1.6;margin:12px 2px 0}
+  .verif b{color:var(--fg)}
+  .verif a{font-weight:650;text-decoration:none}
+  .verif a:hover{text-decoration:underline}
+  .verif .sub{color:var(--mut);opacity:.85}
+
+  section{margin:56px 0 0}
+  h2{font-size:12.5px;font-weight:750;text-transform:uppercase;letter-spacing:.08em;
+     color:var(--mut);margin:0 0 20px}
+  h3{font-size:16.5px;margin:0 0 4px;font-weight:750;letter-spacing:-.01em}
+
+  /* ── TWO DOORS — A leads (capability), B follows (the fixed-fee wedge) ──── */
+  .doors{display:grid;gap:14px}
+  .door{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:20px 20px}
+  .door.lead{border-color:var(--acc-line);box-shadow:0 1px 2px rgba(31,111,235,.1)}
+  .door .tag{font-size:12px;font-weight:750;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin-bottom:8px}
+  .door.lead .tag{color:var(--acc)}
+  .door p{margin:8px 0 0;font-size:14.5px;line-height:1.55;color:#334155}
+  .door p b{color:var(--fg)}
+  .door .win{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line);font-size:14.5px;line-height:1.55}
+  .door .win b{color:var(--ok);font-weight:750}
+  .door .go{display:inline-flex;align-items:center;margin-top:14px;padding:11px 16px;
+            border:1px solid var(--acc-line);border-radius:var(--r-sm);background:var(--acc-soft);
+            color:var(--acc);font-weight:700;text-decoration:none}
+  .door .go:hover{background:rgba(31,111,235,.13)}
+
+  .mathline{background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);
+            padding:16px 18px;margin:14px 0 0;font-size:15px;line-height:1.7}
+  .mathline .row{display:flex;justify-content:space-between;gap:14px;padding:4px 0;border-bottom:1px dashed var(--line)}
+  .mathline .row:last-child{border-bottom:0}
+  .mathline .row .k{color:var(--mut)}
+  .mathline .bad{color:var(--bad);font-weight:700}
+  .mathline .good{color:var(--ok);font-weight:750}
+
+  /* ── THE FEE, NAMING BOTH ENDPOINTS (payer ≠ recipient ≠ fee address) ──── */
+  .feecard{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px}
+  .split{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);
+         border-radius:var(--r-sm);overflow:hidden;margin:14px 0}
+  .split .line{background:var(--card);padding:12px 14px;font-size:14.5px;line-height:1.5}
+  .split .line .who{font-size:11.5px;font-weight:750;text-transform:uppercase;letter-spacing:.06em;
+                    color:var(--mut);display:block;margin-bottom:3px}
+  .split .line .amt{font-weight:750}
+
+  .honest{background:#fffbeb;border:1px solid #fde68a;border-radius:var(--r-sm);
+          padding:16px 18px;font-size:14px;line-height:1.6;color:#78350f}
+  .honest b{color:#92400e}
+  .honest ul{margin:8px 0 0;padding-left:20px}
+  .honest li{margin:7px 0}
+
+  .path{background:var(--card);border:1px solid var(--acc-line);border-radius:var(--r);padding:22px 22px;
+        margin:14px 0 0;box-shadow:0 1px 2px rgba(31,111,235,.08)}
+  .path .step{display:grid;grid-template-columns:26px 1fr;gap:12px;margin:10px 0;font-size:15px;line-height:1.55}
+  .path .n{width:24px;height:24px;border-radius:50%;background:var(--acc-soft);border:1px solid var(--acc-line);
+           color:var(--acc);font-size:13px;font-weight:800;display:flex;align-items:center;justify-content:center;margin-top:2px}
+  .path .step b{font-weight:700}
+
+  footer{margin-top:60px;border-top:1px solid var(--line);padding-top:22px;
+         font-size:13px;color:var(--mut);line-height:1.65}
+  footer .truth{margin-top:16px;padding-top:14px;border-top:1px dashed var(--line);font-size:12.5px}
+  footer .truth b{color:var(--fg)}
+
+  @media (max-width:600px){
+    .wrap{padding:0 16px 56px}
+    .nav{padding:12px 0 4px}
+    .navlinks{gap:14px;font-size:13.5px}
+    .trust{grid-template-columns:1fr}
+    .doors{grid-template-columns:1fr}
+    .btn{flex:1 1 auto;justify-content:center}
+    .btn-note{flex-basis:100%;text-align:center;margin:2px 0 0}
+  }
+</style>
+<link rel="stylesheet" href="../_assets/theme.css">
+
+</head>
+<body>
+<!-- dx-chrome --><style>
+/* dx-chrome — shared, namespaced. Injected by chrome.py; do not hand-edit in built files. */
+.dx-top{position:relative;z-index:50;background:rgba(248,250,252,.86);backdrop-filter:blur(8px);border-bottom:1px solid #e2e8f0}
+.dx-top-in{max-width:900px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px}
+.dx-home{display:inline-flex;align-items:center;gap:7px;font:600 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color:#0f172a;text-decoration:none;padding:6px 2px}
+.dx-home:hover{color:#1f6feb}
+.dx-home .dx-arrow{color:#1f6feb}
+.dx-tag{font:500 12.5px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#64748b;margin-left:auto}
+.dx-foot{position:relative;z-index:50;margin-top:56px;border-top:1px solid #e2e8f0;background:rgba(248,250,252,.86)}
+.dx-foot-in{max-width:900px;margin:0 auto;padding:24px 20px 40px}
+.dx-foot-brand{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+.dx-foot-brand a{font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;text-decoration:none}
+.dx-foot-brand a:hover{color:#1f6feb}
+.dx-foot-brand span{font:500 12.5px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#64748b}
+.dx-foot-nav{display:flex;gap:9px;flex-wrap:wrap}
+.dx-foot-nav a{font:600 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;
+  text-decoration:none;background:rgba(255,255,255,.6);border:1px solid #e2e8f0;border-radius:999px;padding:7px 13px}
+.dx-foot-nav a:hover{border-color:#1f6feb;color:#1f6feb}
+@media(max-width:600px){.dx-tag{display:none}}
+</style>
+<div class="dx-top">
+  <div class="dx-top-in">
+    <a class="dx-home" href="../index.html"><span class="dx-arrow">←</span> DEX fleet</a>
+    <span class="dx-tag">non-custodial rails on Base</span>
+  </div>
+</div>
+<div class="wrap">
+
+  <!-- the shared chrome (chrome.py) already stamps a "← DEX fleet" bar above this, so the page does
+       NOT repeat the wordmark — it carries only the in-page anchors, which stay visible on a phone. -->
+  <div class="nav">
+    <nav class="navlinks">
+      <a href="#doors">What it does</a>
+      <a href="#fee">What it costs</a>
+      <a href="#honest">Who it's not for</a>
+    </nav>
+  </div>
+
+  <!-- ── HERO — DOOR A LEADS: pay-a-stranger-safely (capability), not price ──── -->
+  <div class="hero">
+    <div class="kicker"><span class="dot" id="hdot"></span><span id="hstate">reading the live contract…</span></div>
+    <h1>Pay a stranger <em>safely</em>. The money waits until the deal is done.</h1>
+    <p class="lede">Buying off a forum, hiring someone you don't know, paying an agent you don't control —
+      someone always has to go first. Here nobody does. The money is <b>locked against a condition you both
+      set</b>: met, it releases; never met, after the deadline <b>anyone can trigger the refund — including
+      you</b>. <b>One link. No signup. Nothing to install.</b></p>
+
+    <div class="ctas">
+      <a class="btn btn-p" href="../g2b-escrow/index.html">Lock a deal in escrow →</a>
+      <a class="btn btn-s" href="./new/index.html">Make a pay link</a>
+      <span class="btn-note">no account, nothing to deploy</span>
+    </div>
+  </div>
+
+  <!-- ── TRUST ROW — every cell is a TRUE, checkable claim ──────────────────── -->
+  <div class="trust">
+    <div class="t">
+      <div class="th">The fee, live on-chain</div>
+      <div class="tv">
+        <span class="big" id="feeBps">—</span> bps <span id="feePct" style="color:var(--mut);font-weight:600"></span>
+        <span class="sub" id="feeState">reading <span class="mono">feeBps()</span>…</span>
+      </div>
+    </div>
+    <div class="t">
+      <div class="th">Charged when</div>
+      <div class="tv">
+        The money moves — <b>once</b>, on the way in
+        <span class="sub">escrow takes it on release only; a refund is free</span>
+      </div>
+    </div>
+    <div class="t">
+      <div class="th">Inspect it yourself</div>
+      <div class="tv">
+        <a id="feeContractLink" href="https://basescan.org/address/0x417c41d406c61E09958032Cd77338fc1F1ac7D45" target="_blank" rel="noopener">the fee contract on Basescan ↗</a>
+        <span class="sub">read-only — no wallet, no account to look</span>
+      </div>
+    </div>
+  </div>
+  <p style="font-size:12.5px;color:var(--mut);margin:10px 2px 0">
+    The fee is <b>not a number we promise</b> — it is a number on the contract, read here live.
+    A dead RPC prints <b class="state-bad">UNREACHABLE</b>, never a made-up value.</p>
+
+  <!-- ── VERIFIED — the code on-chain, matched to its source on Sourcify ────── -->
+  <p class="verif">
+    <b>Source-verified.</b> The front-door contracts are published on Sourcify — the deployed code
+    matches its Solidity source byte-for-byte.
+    <a href="https://repo.sourcify.dev/8453/0x417c41d406c61E09958032Cd77338fc1F1ac7D45" target="_blank" rel="noopener">fee registry</a> ·
+    <a href="https://repo.sourcify.dev/8453/0x4B05fA6aD0Ba0D0120Dce19Ce34dde6d1316C237" target="_blank" rel="noopener">escrow</a> ·
+    <a href="https://repo.sourcify.dev/8453/0xAE5951d25FEDD06aB7e124e91Dac3AC20f5e7cAF" target="_blank" rel="noopener">receipts</a>
+    <span class="sub">(Sourcify grade <span class="mono">match</span>)</span>
+  </p>
+
+  <!-- ── TWO DOORS — A first (the wedge), B second (the volume) ─────────────── -->
+  <section id="doors">
+    <h2>Two different problems — pick yours</h2>
+    <div class="doors">
+
+      <div class="door lead">
+        <div class="tag">1 · If the risk is the other person</div>
+        <h3>Pay a stranger, with a way out.</h3>
+        <p>Someone has to go first: send and hope, or trust-me-first. A money-app dispute is a coin-flip run
+          by a company that was not there. Instead: <b>lock the money against a condition</b> — a secret, or
+          an arbiter you both name. The funds sit in a contract, <b>not with us</b>.</p>
+        <div class="win"><b>What you get:</b> released only when the condition is met; if it never is, after
+          the deadline <b>anyone can push the refund — including you</b>. No one can keep it; no one has to
+          be asked. The fee is taken <b>on release only</b> — a deal that falls through costs <b>nothing</b>.
+          An <b>agent can pay this too</b>, with no signup.</div>
+        <a class="go" href="../g2b-escrow/index.html">Open escrow →</a>
+      </div>
+
+      <div class="door">
+        <div class="tag">2 · If the tax is the card's fixed 30¢</div>
+        <h3>Charge $2 a month without a card eating 36¢ of it.</h3>
+        <p>A card processor takes <b>2.9% + 30¢</b> on every charge — and that 30¢ does not care how small the
+          charge is. On a <b>$2</b> ticket that is <b>36¢ gone</b>, <b>18%</b> of the money, before anything
+          else. Same small amount, again and again: a coach, a Discord, a newsletter.</p>
+        <div class="win"><b>What you keep:</b> on that same $2 sub we take <b>10¢</b> where the card takes
+          <b>36¢</b> — you keep <b>26¢ more, every month, forever</b>. One approval, then it runs: no monthly
+          nag, no processor to be approved by.</div>
+        <a class="go" href="./new/index.html">Make a pay link →</a>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── ONE PATH ───────────────────────────────────────────────────────────── -->
+  <section id="start">
+    <h2>The whole setup, in one step</h2>
+    <div class="path">
+      <div class="step"><div class="n">1</div><div><b>Escrow:</b> paste the amount and the other side's
+        address, pick a secret or an arbiter, and lock. You get a <b>link</b> to hand over — the funds are
+        in the contract, not with you or us. <b>No account, nothing to deploy.</b></div></div>
+      <div class="step"><div class="n">2</div><div><b>Pay link:</b> paste <b>where you want to be paid</b>
+        and you get a <b>link + QR</b> — send it however you like. It forwards straight to your address;
+        the toll is taken on the way. <b>Nobody signs up.</b></div></div>
+      <div class="ctas" style="margin-top:18px">
+        <a class="btn btn-p" href="../g2b-escrow/index.html">Lock a deal in escrow →</a>
+        <a class="btn btn-s" href="./new/index.html">Make a pay link →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── THE FEE — WHO PAYS vs WHO RECEIVES vs WHERE THE FEE GOES ───────────── -->
+  <section id="fee">
+    <h2>What it costs — and who actually pays it</h2>
+    <div class="feecard">
+      <p style="margin:0 0 4px;font-size:15px;line-height:1.6">
+        One rate, <b><span id="feeBpsInline">—</span> bps = 5%</b>, taken <b>from the amount that moves</b>.
+        <b>Nobody is surcharged on top.</b> The payer sends the sticker price; the recipient nets 95%; a
+        <b>separate address</b> receives the 5%.</p>
+      <div class="split">
+        <div class="line pay"><span class="who">The payer pays</span>
+          the ticket, exactly as agreed — <span class="amt">$2.00</span>, nothing added.</div>
+        <div class="line get"><span class="who">The recipient nets</span>
+          the amount minus the fee — <span class="amt">$1.90</span> on a $2 ticket.</div>
+        <div class="line fee"><span class="who">A separate address receives the fee</span>
+          <span class="amt">$0.10</span> → <span class="mono" id="feerecip">reading…</span></div>
+      </div>
+      <p style="font-size:13.5px;color:var(--mut);margin:0">
+        On <b>escrow</b> the fee is on a <b>release only</b> — a refund returns 100%. The rate is
+        <b>owner-settable and read live</b> above, and the contract caps it. No monthly platform fee.</p>
+    </div>
+    <div class="mathline">
+      <div class="row"><span class="k">A card processor, on a $2 ticket</span><span class="bad">2.9% + 30¢ = 36¢</span></div>
+      <div class="row"><span class="k">This, on a $2 ticket</span><span class="good">flat 5% = 10¢</span></div>
+      <div class="row"><span class="k">A card processor, on a $100 invoice</span><span class="bad">2.9% + 30¢ ≈ $3.20</span></div>
+      <div class="row"><span class="k">This, on a $100 invoice</span><span class="good">flat 5% = $5</span></div>
+    </div>
+    <p style="font-size:14px;color:#475569;margin:12px 0 0">
+      The win compounds on <b>small</b> and <b>recurring</b> tickets — the exact place a fixed 30¢ hurts most.
+      It is <b>not</b> a claim to be cheapest everywhere; the honest cutoff is below.</p>
+  </section>
+
+  <!-- ── HONEST NOT-FOR ─────────────────────────────────────────────────────── -->
+  <section id="honest">
+    <h2>Who this is <em>not</em> for (the honest part)</h2>
+    <div class="honest">
+      <b>Read this before you switch.</b> This is not strictly better than a card — it is better in specific
+      places, and worse in others.
+      <ul>
+        <li><b>Big one-off invoices.</b> Above about <b>$14</b> the card's percentage beats our flat 5%:
+          on a $100 invoice a card is ~$3.20 and <b>we are $5</b>. If your whole business is a few large
+          invoices, a card processor is genuinely fine.</li>
+        <li><b>Anyone already on a ~1% crypto processor.</b> On price alone we lose to them at any size —
+          we are 5% to their 1%. We are not selling the cheapest number; we are selling the <b>bundle</b>:
+          escrow, one link, no signup.</li>
+        <li><b>People who never touch a wallet and never want to.</b> Some steps live in a wallet. If
+          interacting with one makes you angry, that is friction you did not ask for.</li>
+        <li><b>Anything needing a bank statement, a chargeback, or credit.</b> We are not a bank and not a
+          card. No chargeback here — the <b>escrow is the substitute</b>.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    <div>The one sentence to repeat to a friend:</div>
+    <div style="margin-top:6px;font-size:14px;color:var(--fg)">
+      “If you don't trust the other side, lock the money until the deal is done — and if you charge the same
+      small amount again and again, it takes a flat 5% and runs itself. No bank, no card processor, no
+      chasing.”</div>
+    <div class="truth">
+      <b>Truth rules.</b> The fee is read LIVE from <span class="mono">feeBps()</span> on Base
+      (<span class="mono">0x417c41d4…7D45</span>) as you look — a dead RPC shows UNREACHABLE, never a stale
+      number. Card baseline 2.9% + 30¢ (US standard); parity vs a flat 5% is exactly $14.29, so the page
+      rounds <b>down</b> to “$14”. The fee is subtracted from the amount: payer pays the sticker, recipient
+      nets the rest, a separate address receives the fee — nobody is surcharged. Addresses copied from
+      record files (#73). Static page, opens from file://, no dependencies.
+    </div>
+  </footer>
+</div>
+
+<script src="../_assets/lib.js"></script>
+<script>
+"use strict";
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// MERCHANT FRONT DOOR — capability-first (Door A: escrow-for-strangers leads), price second
+// (Door B: the fixed-fee wedge vs a card). ONE page, ZERO deps, opens from file://.
+// The only network call is the live fee read.
+//
+// TRUTH RULES: (1) the fee is read LIVE from feeBps() on the fee-bearing registry; on a dead RPC the
+// page prints UNREACHABLE and shows NO number rather than a stale one. (2) raw bps AND the % both shown.
+// (3) every address COPIED from a record file (GOTCHA #73), EIP-55 checksummed.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+const CFG = {
+  chainId: 8453,
+  rpc: "https://base-rpc.publicnode.com",            // publicnode answers ACAO:* (mainnet.base.org sends null)
+  // the fee-bearing registry the pay-link path actually charges through (f1a inherits p2's fee).
+  feeContract: "0x417c41d406c61E09958032Cd77338fc1F1ac7D45", // p2-forwarder/KEY-RECORD.md (Base mainnet)
+  // the SEPARATE address the fee is routed to — the record constant, used to checksum the live read.
+  feeRecipient: "0x5c0fc0917260A0656D253f1625053e3E6Dd2Ef3c", // p2-forwarder/KEY-RECORD.md (treasury feeRecipient)
+};
+try { const _r = new URLSearchParams(location.search).get("rpc"); if (_r) CFG.rpc = _r; } catch (e) {}
+
+const SEL = { feeBps: "0x24a9d853", maxFeeBps: "0xd55be8c6", feeRecipient: "0x46904840" };   // keccak-derived; asserted == cast sig
+
+const strip0x = (h) => (h || "").replace(/^0x/i, "").toLowerCase();
+const $ = (id) => document.getElementById(id);
+
+// A rate-limited public RPC answers 200 with NO `result` under a burst. Require a real result, retry
+// with backoff, and on final failure throw a CLEAN sentence — a fault is its own state and reads as one.
+async function rpc(method, params) {
+  let last;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await _fetchT(CFG.rpc, { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+      if (!res.ok) { last = new Error("http " + res.status); }
+      else {
+        const j = await res.json().catch(() => null);
+        if (!j) { last = new Error("empty body"); }
+        else if (j.error) { last = new Error(j.error.message || "rpc error"); }
+        else if (typeof j.result !== "undefined" && j.result !== null) return j.result;
+        else { last = new Error("rpc returned no result"); }
+      }
+    } catch (e) { last = e; }
+    await new Promise((r) => setTimeout(r, 220 * (attempt + 1)));
+  }
+  throw last || new Error("rpc failed");
+}
+const ethCall = (to, data) => rpc("eth_call", [{ to, data }, "latest"]);
+const wordAddr = (w) => "0x" + strip0x(w).slice(24).padStart(40, "0");
+
+function setState(ok, msg) {
+  const d = $("hdot"), s = $("hstate");
+  if (d) d.className = "dot" + (ok === true ? " ok" : ok === false ? " bad" : "");
+  if (s) s.innerHTML = msg;
+}
+
+async function live() {
+  try {
+    const [cid, code, bps, maxbps] = await Promise.all([
+      rpc("eth_chainId", []), rpc("eth_getCode", [CFG.feeContract, "latest"]),
+      ethCall(CFG.feeContract, SEL.feeBps), ethCall(CFG.feeContract, SEL.maxFeeBps),
+    ]);
+    if (Number(BigInt(cid)) !== CFG.chainId) throw new Error("wrong chain " + cid);
+    const codeLen = strip0x(code).length / 2;
+    if (codeLen === 0) throw new Error("no code at fee contract");
+    const b = Number(BigInt(bps) % (1n << 16n));
+    const pct = (b / 100).toFixed(b % 100 === 0 ? 0 : 2).replace(/\.?0+$/, "");
+    // the CAP is read live too, so "capped at X%" is a fact from the chain, not a promise
+    const capPct = (Number(BigInt(maxbps) % (1n << 16n)) / 100).toFixed(0);
+
+    if ($("feeBps")) $("feeBps").textContent = String(b);
+    if ($("feePct")) $("feePct").textContent = "= " + pct + "%";
+    if ($("feeBpsInline")) $("feeBpsInline").textContent = String(b);
+    if ($("feeState")) {
+      $("feeState").innerHTML =
+        `live, owner-settable · <span class="mono">feeBps()</span> on ${codeLen.toLocaleString()} B of code`;
+    }
+    setState(true, `fee ${pct}% — live on Base, capped at ${capPct}% by the contract`);
+
+    // the feeRecipient — the SEPARATE address the fee goes to (payer≠recipient≠fee address). The
+    // fee card must NAME it; a live read that fails is labelled baked, never silently left blank.
+    // The RPC returns lowercase; display the EIP-55 form ONLY when the live value matches the record
+    // constant (case-insensitive) — a mismatch prints the live read verbatim, never a cooked value.
+    try {
+      const rc = wordAddr(await ethCall(CFG.feeContract, SEL.feeRecipient));
+      if ($("feerecip")) {
+        const shown = strip0x(rc) === strip0x(CFG.feeRecipient) ? CFG.feeRecipient : rc;
+        $("feerecip").textContent = shown + " — live";
+      }
+    } catch (e) {
+      if ($("feerecip")) $("feerecip").textContent = "0x5c0fc0917260A0656D253f1625053e3E6Dd2Ef3c — BAKED, RPC unreachable";
+    }
+  } catch (e) {
+    // HONESTY TEETH — a dead RPC must NOT keep the last-read number and pretend it is live.
+    const why = String(e && e.message ? e.message : e);
+    if ($("feeBps")) $("feeBps").textContent = "—";
+    if ($("feeBpsInline")) $("feeBpsInline").textContent = "—";
+    if ($("feePct")) $("feePct").textContent = "";
+    if ($("feeState")) $("feeState").innerHTML = "UNREACHABLE — value not shown, not guessed";
+    if ($("feerecip")) $("feerecip").textContent = "0x5c0fc0917260A0656D253f1625053e3E6Dd2Ef3c — BAKED, RPC unreachable";
+    setState(false, `UNREACHABLE (<span class="mono">${why.replace(/[<>]/g, "")}</span>) — the bps below is not a live number`);
+  }
+}
+live();
+
+globalThis.__merchant = { CFG, SEL, live };
+</script>
+
+<div class="dx-foot">
+  <div class="dx-foot-in">
+    <div class="dx-foot-brand"><a href="../index.html">← DEX fleet</a>
+      <span>truth-only · every number read on-chain</span></div>
+    <nav class="dx-foot-nav" aria-label="All pages"><a href="../subscribe/index.html">Subscriptions</a><a href="../merchant/index.html">For merchants</a><a href="../g2b-escrow/index.html">Escrow</a><a href="../g2a-streams/index.html">Streams</a><a href="../f1a-payment-links/index.html">Payment links</a><a href="../p2-forwarder/index.html">Forwarder</a><a href="../p3-router/index.html">Swap router</a><a href="../g4b-receipts/index.html">Receipts</a><a href="../g3a-sponsorship/index.html">Gasless</a><a href="../f1c-duster/index.html">Dust → USDC</a><a href="../miniapp/index.html">Pay in-feed</a><a href="../fleet-executor/index.html">Executor</a><a href="../status/index.html">Status</a><a href="../security/index.html">Security</a><a href="../changelog/index.html">Changelog</a></nav>
+  </div>
+</div>
+<!-- dx-timelock:start -->
+<div class="dx-timelock" id="dxTimelock" style="display:none;max-width:720px;margin:14px auto 0;padding:9px 12px;border:1px solid var(--line,#2a3550);border-radius:8px;font-size:12.5px;color:var(--mut,#8fa0be)"></div>
+<script>
+"use strict";
+(function () {
+  var el = document.getElementById("dxTimelock"); if (!el) return;
+  var ADDR = "0x4B05fA6aD0Ba0D0120Dce19Ce34dde6d1316C237", BAKED = 172800, RPC = "https://base-rpc.publicnode.com";
+  var SEL = "0x7aadef8b";
+  function hum(s) { var d = s / 86400; return (d % 1 === 0) ? (d + " day" + (d > 1 ? "s" : "")) : Math.round(s / 3600) + "h"; }
+  function paint(sec, live) {
+    if (!sec) return;
+    el.innerHTML = "<b>a fee change is STAGED, not instant</b> — the owner's raise or recipient change "
+      + "waits <b>" + hum(sec) + "</b> (the contract's TIMELOCK) before it can be committed"
+      + (live ? " — read live on-chain" : " — TIMELOCK " + hum(BAKED) + " baked, RPC unreachable") + ".";
+    el.style.display = "";
+  }
+  paint(BAKED, false);
+  try {
+    var ac = new AbortController(); var to = setTimeout(function () { ac.abort(); }, 8000);
+    fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, signal: ac.signal,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: ADDR, data: SEL }, "latest"] }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (j && j.result) paint(parseInt(j.result.slice(-16), 16), true); })
+      .catch(function () {})
+      .finally(function () { clearTimeout(to); });
+  } catch (e) {}
+})();
+</script>
+<!-- dx-timelock:end -->
+</body>
+</html>

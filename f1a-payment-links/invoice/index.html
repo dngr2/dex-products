@@ -1,0 +1,638 @@
+<!doctype html>
+<html data-theme="light" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invoice — get paid in USDC on Base</title>
+<meta property="og:title" content="Invoice — get paid in USDC on Base">
+<meta property="og:description" content="A hosted, payable invoice. No account, no wallet install for the payer.">
+<style>
+  :root { --fg:#0f172a; --muted:#64748b; --bg:#f8fafc; --card:#fff; --line:#e2e8f0; --btn:#1f6feb;
+          --ok:#0f9d58; --warn:#b45309; --bad:#b91c1c; --chip:#f1f5f9; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; color:var(--fg); background:var(--bg); }
+  .wrap { max-width:680px; margin:4vh auto; padding:0 16px 60px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:24px; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+  header { display:flex; align-items:center; gap:10px; margin-bottom:2px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); flex:0 0 auto; }
+  .dot.ok { background:var(--ok); box-shadow:0 0 0 4px rgba(15,157,88,.12); }
+  .dot.bad { background:var(--bad); box-shadow:0 0 0 4px rgba(185,28,28,.12); }
+  h1 { font-size:20px; margin:0; font-weight:700; flex:1; letter-spacing:-.01em; }
+  .badge { font-size:11px; padding:2px 8px; border-radius:999px; background:var(--chip); color:var(--muted); font-weight:650; }
+  .badge.paid { background:#dcfce7; color:#166534; }
+  .badge.due  { background:#fef3c7; color:#92400e; }
+  .sub { color:var(--muted); font-size:13.5px; margin:6px 0 16px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:12px 0 5px; font-weight:650; text-transform:uppercase; letter-spacing:.03em; }
+  input, textarea { width:100%; padding:10px; border:1px solid var(--line); border-radius:9px; font:14px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--fg); background:#fff; }
+  input:focus, textarea:focus { outline:2px solid rgba(31,111,235,.25); border-color:rgba(31,111,235,.4); }
+  button { padding:12px 16px; border:0; border-radius:9px; background:var(--btn); color:#fff; font-size:15px; font-weight:650; cursor:pointer; }
+  button.wide { width:100%; margin-top:16px; }
+  button:disabled { opacity:.55; cursor:default; }
+  .foot { color:var(--muted); font-size:12px; margin-top:14px; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap:anywhere; }
+  .err { color:var(--bad); font-size:13.5px; margin-top:10px; }
+  .hide { display:none; }
+  .fee { background:var(--chip); border:1px solid var(--line); border-radius:9px; padding:10px 12px; font-size:13px; margin-top:14px; }
+  table.items { width:100%; border-collapse:collapse; margin:14px 0; }
+  table.items th, table.items td { text-align:right; padding:8px 6px; border-bottom:1px solid var(--line); font-size:14px; }
+  table.items th:first-child, table.items td:first-child { text-align:left; }
+  table.items th { color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  table.items tr:last-child td { border-bottom:0; }
+  .tot { display:flex; justify-content:space-between; padding:10px 6px 2px; font-weight:700; font-size:16px; border-top:2px solid var(--fg); }
+  .meta { color:var(--muted); font-size:13px; margin:2px 0; }
+  .pay { margin-top:18px; border-top:1px solid var(--line); padding-top:16px; text-align:center; }
+  .qrbox { display:inline-block; padding:10px; background:#fff; border:1px solid var(--line); border-radius:10px; }
+  .depaddr { display:block; font-size:12px; color:var(--fg); background:var(--chip); border:1px solid var(--line); border-radius:8px; padding:8px; margin-top:6px; word-break:break-all; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; justify-content:center; }
+  .chip { border:1px solid var(--line); border-radius:999px; padding:6px 13px; font-size:13px; font-weight:600; background:#fff; cursor:pointer; }
+  .copyok { color:var(--ok); font-size:12px; }
+  .paidbox { margin-top:16px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:9px; padding:12px 14px; font-size:13.5px; }
+  .warnbox { margin-top:12px; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:10px 12px; font-size:13px; }
+  .footbar { margin-top:22px; padding-top:14px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; text-align:center; }
+  .footbar a { color:var(--muted); }
+  .rows { margin-top:14px; }
+  .row { display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid var(--line); font-size:13.5px; }
+  .row:last-child { border-bottom:0; }
+  .row .k { color:var(--muted); }
+  .row .v { font-weight:600; text-align:right; }
+  .toggle { display:flex; gap:8px; margin-top:8px; }
+  .toggle .chip.on { color:var(--btn); border-color:rgba(31,111,235,.4); background:rgba(31,111,235,.06); }
+</style>
+<link rel="stylesheet" href="../../_assets/theme.css">
+<link rel="icon" type="image/svg+xml" href="../../_assets/favicon.svg">
+</head>
+<body>
+<!-- dx-chrome --><style>
+/* dx-chrome — shared, namespaced. Injected by chrome.py; do not hand-edit in built files. */
+.dx-top{position:relative;z-index:50;background:rgba(248,250,252,.86);backdrop-filter:blur(8px);border-bottom:1px solid #e2e8f0}
+.dx-top-in{max-width:900px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px}
+.dx-home{display:inline-flex;align-items:center;gap:7px;font:600 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color:#0f172a;text-decoration:none;padding:6px 2px}
+.dx-home:hover{color:#1f6feb}
+.dx-home .dx-arrow{color:#1f6feb}
+.dx-tag{font:500 12.5px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#64748b;margin-left:auto}
+.dx-foot{position:relative;z-index:50;margin-top:56px;border-top:1px solid #e2e8f0;background:rgba(248,250,252,.86)}
+.dx-foot-in{max-width:900px;margin:0 auto;padding:24px 20px 40px}
+.dx-foot-brand{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+.dx-foot-brand a{font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;text-decoration:none}
+.dx-foot-brand a:hover{color:#1f6feb}
+.dx-foot-brand span{font:500 12.5px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#64748b}
+.dx-foot-nav{display:flex;gap:9px;flex-wrap:wrap}
+.dx-foot-nav a{font:600 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;
+  text-decoration:none;background:rgba(255,255,255,.6);border:1px solid #e2e8f0;border-radius:999px;padding:7px 13px}
+.dx-foot-nav a:hover{border-color:#1f6feb;color:#1f6feb}
+@media(max-width:600px){.dx-tag{display:none}}
+</style>
+<div class="dx-top">
+  <div class="dx-top-in">
+    <a class="dx-home" href="../../index.html"><span class="dx-arrow">←</span> DEX fleet</a>
+    <span class="dx-tag">non-custodial rails on Base</span>
+  </div>
+</div>
+<div class="wrap">
+  <div class="card" id="root"></div>
+  <div class="footbar" id="footbar"></div>
+</div>
+
+<script src="../../_assets/lib.js"></script>
+<script>
+(function (G) {
+  "use strict";
+  // GF(256), primitive 0x11d — Reed–Solomon over the QR field
+  var EXP = new Array(256), LOG = new Array(256);
+  (function () { var x = 1; for (var i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 0x100) x ^= 0x11d; } EXP[255] = EXP[0]; })();
+  function gmul(a, b) { return (a === 0 || b === 0) ? 0 : EXP[(LOG[a] + LOG[b]) % 255]; }
+  function rsGen(n) { var p = [1]; for (var i = 0; i < n; i++) { var r = new Array(p.length + 1).fill(0); for (var j = 0; j < p.length; j++) { r[j] ^= gmul(p[j], 1); r[j + 1] ^= gmul(p[j], EXP[i]); } p = r; } return p; }
+  function rsEcc(data, n) { var gen = rsGen(n), res = data.concat(new Array(n).fill(0)); for (var i = 0; i < data.length; i++) { var c = res[i]; if (c !== 0) for (var j = 1; j < gen.length; j++) res[i + j] ^= gmul(gen[j], c); } return res.slice(data.length); }
+
+  // per-version Reed–Solomon block structure, ECC-L only: [count, totalCw, dataCw]
+  var RS = { 1: [[1, 26, 19]], 2: [[1, 44, 34]], 3: [[1, 70, 55]], 4: [[1, 100, 80]], 5: [[1, 134, 108]],
+    6: [[2, 86, 68]], 7: [[2, 98, 78]], 8: [[2, 121, 97]], 9: [[2, 146, 116]], 10: [[2, 86, 68], [2, 87, 69]] };
+  var ALIGN = { 1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34], 7: [6, 22, 38], 8: [6, 24, 42], 9: [6, 26, 46], 10: [6, 28, 50] };
+  function dataCw(v) { var n = 0; RS[v].forEach(function (b) { n += b[0] * b[2]; }); return n; }
+  function byteCap(v) { return Math.floor((dataCw(v) * 8 - 4 - (v < 10 ? 8 : 16)) / 8); }
+
+  function bchDigit(x) { var d = 0; while (x !== 0) { d++; x >>>= 1; } return d; }
+  function formatBits(ecl, mask) { var data = (ecl << 3) | mask, d = data << 10; while (bchDigit(d) - bchDigit(0x537) >= 0) d ^= 0x537 << (bchDigit(d) - bchDigit(0x537)); return ((data << 10) | d) ^ 0x5412; }
+  function versionBits(v) { var d = v << 12; while (bchDigit(d) - bchDigit(0x1f25) >= 0) d ^= 0x1f25 << (bchDigit(d) - bchDigit(0x1f25)); return (v << 12) | d; }
+
+  function chooseVersion(n) { for (var v = 1; v <= 10; v++) if (n <= byteCap(v)) return v; throw new Error("qr: too long (" + n + " bytes)"); }
+
+  function codewords(text, version) {
+    var bytes = Array.prototype.slice.call(new TextEncoder().encode(text)), bits = [];
+    function put(val, len) { for (var i = len - 1; i >= 0; i--) bits.push((val >>> i) & 1); }
+    put(4, 4); put(bytes.length, version < 10 ? 8 : 16); bytes.forEach(function (c) { put(c, 8); });
+    var total = dataCw(version), cap = total * 8;
+    for (var i = 0; i < 4 && bits.length < cap; i++) bits.push(0);
+    while (bits.length % 8 !== 0) bits.push(0);
+    var data = []; for (var k = 0; k < bits.length; k += 8) { var x = 0; for (var j = 0; j < 8; j++) x = (x << 1) | bits[k + j]; data.push(x); }
+    var pad = [0xEC, 0x11], pi = 0; while (data.length < total) data.push(pad[pi++ % 2]);
+    var blocks = [], off = 0;
+    RS[version].forEach(function (blk) { for (var i = 0; i < blk[0]; i++) { var dd = data.slice(off, off + blk[2]); off += blk[2]; blocks.push({ d: dd, e: rsEcc(dd, blk[1] - blk[2]) }); } });
+    var out = [], maxD = Math.max.apply(null, blocks.map(function (b) { return b.d.length; }));
+    for (var i2 = 0; i2 < maxD; i2++) blocks.forEach(function (b) { if (i2 < b.d.length) out.push(b.d[i2]); });
+    var maxE = Math.max.apply(null, blocks.map(function (b) { return b.e.length; }));
+    for (var i3 = 0; i3 < maxE; i3++) blocks.forEach(function (b) { if (i3 < b.e.length) out.push(b.e[i3]); });
+    return out;
+  }
+
+  function blank(s) { var m = []; for (var i = 0; i < s; i++) m.push(new Array(s).fill(null)); return m; }
+  function finder(m, r, c) { for (var dr = -1; dr <= 7; dr++) for (var dc = -1; dc <= 7; dc++) { var rr = r + dr, cc = c + dc; if (rr < 0 || cc < 0 || rr >= m.length || cc >= m.length) continue; var on = (dr >= 0 && dr <= 6 && (dc === 0 || dc === 6)) || (dc >= 0 && dc <= 6 && (dr === 0 || dr === 6)) || (dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4); m[rr][cc] = on ? 1 : 0; } }
+  function align(m, cx, cy) { for (var dr = -2; dr <= 2; dr++) for (var dc = -2; dc <= 2; dc++) m[cy + dr][cx + dc] = (Math.max(Math.abs(dr), Math.abs(dc)) !== 1) ? 1 : 0; }
+  function reserved(s, version) {
+    var rm = blank(s).map(function (r) { return r.map(function () { return false; }); });
+    function mark(r, c, dim) { for (var dr = 0; dr < dim; dr++) for (var dc = 0; dc < dim; dc++) { var rr = r + dr, cc = c + dc; if (rr >= 0 && cc >= 0 && rr < s && cc < s) rm[rr][cc] = true; } }
+    mark(-1, -1, 9); mark(-1, s - 8, 9); mark(s - 8, -1, 9);
+    for (var i = 0; i < s; i++) { rm[6][i] = true; rm[i][6] = true; }
+    ALIGN[version].forEach(function (cy) { ALIGN[version].forEach(function (cx) { if ((cx === 6 && cy === 6) || (cx === 6 && cy === s - 7) || (cx === s - 7 && cy === 6)) return; mark(cy - 2, cx - 2, 5); }); });
+    for (var a = 0; a < 9; a++) { rm[8][a] = true; rm[a][8] = true; }
+    for (var b = 0; b < 8; b++) { rm[8][s - 1 - b] = true; rm[s - 1 - b][8] = true; }
+    rm[s - 8][8] = true;
+    if (version >= 7) for (var p = 0; p < 6; p++) for (var q = 0; q < 3; q++) { rm[s - 11 + q][p] = true; rm[p][s - 11 + q] = true; }
+    return rm;
+  }
+  function functions(m, version) {
+    var s = m.length;
+    finder(m, 0, 0); finder(m, 0, s - 7); finder(m, s - 7, 0);
+    for (var i = 8; i < s - 8; i++) { if (m[6][i] === null) m[6][i] = i % 2 === 0 ? 1 : 0; if (m[i][6] === null) m[i][6] = i % 2 === 0 ? 1 : 0; }
+    ALIGN[version].forEach(function (cy) { ALIGN[version].forEach(function (cx) { if ((cx === 6 && cy === 6) || (cx === 6 && cy === s - 7) || (cx === s - 7 && cy === 6)) return; align(m, cx, cy); }); });
+    for (var a = 0; a < 9; a++) { if (m[8][a] === null) m[8][a] = 0; if (m[a][8] === null) m[a][8] = 0; }
+    for (var b = 0; b < 8; b++) { if (m[8][s - 1 - b] === null) m[8][s - 1 - b] = 0; if (m[s - 1 - b][8] === null) m[s - 1 - b][8] = 0; }
+    m[s - 8][8] = 1;
+    if (version >= 7) { var vb = versionBits(version); for (var k = 0; k < 18; k++) { var bit = (vb >>> k) & 1, aa = Math.floor(k / 3), bb = k % 3; m[s - 11 + bb][aa] = bit; m[aa][s - 11 + bb] = bit; } }
+  }
+  function placeData(m, cw) {
+    var s = m.length, dir = -1, row = s - 1, col = s - 1, idx = 0, total = cw.length * 8;
+    function bitAt(i) { return i < total ? (cw[i >> 3] >>> (7 - (i & 7))) & 1 : 0; }
+    for (; col > 0; col -= 2) {
+      if (col === 6) col--;
+      for (;;) {
+        for (var c = 0; c < 2; c++) { var cc = col - c; if (m[row][cc] === null) m[row][cc] = bitAt(idx++); }
+        row += dir; if (row < 0 || row >= s) { row -= dir; dir = -dir; break; }
+      }
+    }
+  }
+  function maskFn(mask, r, c) {
+    switch (mask) {
+      case 0: return (r + c) % 2 === 0; case 1: return r % 2 === 0; case 2: return c % 3 === 0;
+      case 3: return (r + c) % 3 === 0; case 4: return (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0;
+      case 5: return ((r * c) % 2 + (r * c) % 3) === 0; case 6: return (((r * c) % 2 + (r * c) % 3) % 2) === 0;
+      case 7: return (((r + c) % 2 + (r * c) % 3) % 2) === 0;
+    }
+  }
+  function applyMask(m, mask, version) { var s = m.length, rm = reserved(s, version); for (var r = 0; r < s; r++) for (var c = 0; c < s; c++) if (!rm[r][c] && maskFn(mask, r, c)) m[r][c] ^= 1; }
+  function putFormat(m, ecl, mask) {
+    var s = m.length, bits = formatBits(ecl, mask); function bit(i) { return (bits >>> i) & 1; }
+    for (var i = 0; i <= 5; i++) m[i][8] = bit(i);
+    m[7][8] = bit(6); m[8][8] = bit(7); m[8][7] = bit(8);
+    for (var k = 9; k < 15; k++) m[8][14 - k] = bit(k);
+    for (var a = 0; a < 8; a++) m[8][s - 1 - a] = bit(a);
+    for (var b = 8; b < 15; b++) m[s - 15 + b][8] = bit(b);
+    m[s - 8][8] = 1;
+  }
+  // ISO/IEC 18004 mask penalty; lowest score wins (matches the reference encoder exactly)
+  function penalty(m) {
+    var s = m.length, p = 0, cont = new Array(s + 1).fill(0);
+    for (var r = 0; r < s; r++) { var prev = m[r][0], len = 0; for (var c = 0; c < s; c++) { if (m[r][c] === prev) len++; else { if (len >= 5) cont[len]++; len = 1; prev = m[r][c]; } } if (len >= 5) cont[len]++; }
+    for (var c2 = 0; c2 < s; c2++) { var pv = m[0][c2], ln = 0; for (var r2 = 0; r2 < s; r2++) { if (m[r2][c2] === pv) ln++; else { if (ln >= 5) cont[ln]++; ln = 1; pv = m[r2][c2]; } } if (ln >= 5) cont[ln]++; }
+    for (var l = 5; l <= s; l++) p += cont[l] * (l - 2);
+    for (var r3 = 0; r3 < s - 1; r3++) { var c3 = 0; while (c3 < s - 1) { var tr = m[r3][c3 + 1]; if (tr !== m[r3 + 1][c3 + 1]) { c3 += 2; continue; } if (tr !== m[r3][c3]) { c3 += 1; continue; } if (tr !== m[r3 + 1][c3]) { c3 += 1; continue; } p += 3; c3 += 1; } }
+    function L3(get) { var cnt = 0; for (var i = 0; i < s - 10; i++) { var o1 = !get(i + 1) && get(i + 4) && !get(i + 5) && get(i + 6) && !get(i + 9) && get(i) && get(i + 2) && get(i + 3) && !get(i + 7) && !get(i + 8) && !get(i + 10); var o2 = !get(i + 1) && get(i + 4) && !get(i + 5) && get(i + 6) && !get(i + 9) && !get(i) && !get(i + 2) && !get(i + 3) && get(i + 7) && get(i + 8) && get(i + 10); if (o1 || o2) { cnt++; if (get(i + 10)) i++; } } return cnt; }
+    for (var r4 = 0; r4 < s; r4++) p += 40 * L3(function (i) { return m[r4][i]; });
+    for (var c4 = 0; c4 < s; c4++) p += 40 * L3(function (i) { return m[i][c4]; });
+    var dark = 0; for (var r5 = 0; r5 < s; r5++) for (var c5 = 0; c5 < s; c5++) dark += m[r5][c5];
+    p += Math.floor(Math.abs(dark * 100 / (s * s) - 50) / 5) * 10;
+    return p;
+  }
+  function scoreMatrix(s, v, cw, mask) {
+    var m = blank(s); functions(m, v); placeData(m, cw); applyMask(m, mask, v); putFormat(m, 1, mask);
+    // reference scores in "test" mode: format/version/dark modules are zero while scoring
+    for (var i = 0; i <= 5; i++) m[i][8] = 0; m[7][8] = 0; m[8][8] = 0; m[8][7] = 0;
+    for (var k = 9; k < 15; k++) m[8][14 - k] = 0;
+    for (var a = 0; a < 8; a++) m[8][s - 1 - a] = 0;
+    for (var b = 8; b < 15; b++) m[s - 15 + b][8] = 0;
+    m[s - 8][8] = 0;
+    if (v >= 7) for (var p = 0; p < 6; p++) for (var q = 0; q < 3; q++) { m[s - 11 + q][p] = 0; m[p][s - 11 + q] = 0; }
+    return m;
+  }
+  function encode(text) {
+    var v = chooseVersion(Array.prototype.slice.call(new TextEncoder().encode(text)).length);
+    var cw = codewords(text, v), s = 4 * v + 17, best = 0, bestPen = Infinity;
+    for (var mk = 0; mk < 8; mk++) { var pen = penalty(scoreMatrix(s, v, cw, mk)); if (pen < bestPen) { bestPen = pen; best = mk; } }
+    var m = blank(s); functions(m, v); placeData(m, cw); applyMask(m, best, v); putFormat(m, 1, best);
+    return { size: s, version: v, matrix: m };
+  }
+
+  function escA(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
+  G.qrHTML = function (text, px) {
+    px = px || 200;
+    return '<canvas class="qr" data-qr="' + escA(text) + '" data-px="' + px +
+      '" style="width:' + px + 'px;height:' + px + 'px;background:#fff;border-radius:8px"></canvas>';
+  };
+  G.drawQRs = function (root) {
+    var nodes = (root || document).querySelectorAll("canvas[data-qr]:not([data-done])");
+    Array.prototype.forEach.call(nodes, function (cv) {
+      var text = cv.getAttribute("data-qr"), px = parseInt(cv.getAttribute("data-px") || "200", 10);
+      try {
+        var r = encode(text), s = r.size, quiet = 4, total = s + quiet * 2;
+        // size the BACKING STORE in whole device pixels so each module is an exact integer
+        // number of them — a 4px/module code scans; a fractional 3.4px one can fail at 1x.
+        var dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 4);
+        var scale = Math.max(2, Math.floor((px * dpr) / total));
+        var size = scale * total;
+        cv.width = size; cv.height = size;
+        var g = cv.getContext("2d");
+        g.fillStyle = "#fff"; g.fillRect(0, 0, size, size);
+        g.fillStyle = "#000";
+        for (var y = 0; y < s; y++) for (var x = 0; x < s; x++) if (r.matrix[y][x]) g.fillRect((x + quiet) * scale, (y + quiet) * scale, scale, scale);
+        cv.setAttribute("data-done", "1");
+      } catch (e) { cv.setAttribute("title", "qr: " + e.message); }
+    });
+  };
+})(window);
+</script>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// INVOICE — a JSON object in the URL FRAGMENT is the whole invoice. No server, no DB, no account.
+//   #i=<base64url(json)>   the document
+// The page RENDERS that object; "API" = POST/emit the same JSON. Everything shown that is a
+// number/address comes from the object or the chain — nothing is fabricated (#112/#15).
+//
+// ONE PRIMITIVE (v1, link leg): f1a `request(to, USDC, amount, keccak(memo))` -> a deposit address
+// that auto-forwards to `to`; the forwarder pays p2's live fee. The payer does ONE ERC-20 transfer.
+// QR is EIP-681 (token@chain/transfer?…) — never raw hex. (Escrow leg = v3, per the design doc.)
+//
+// SOURCES copied, never retyped (GOTCHA #73): RequestRegistry 0x9651cD59…c749, fee contract
+// 0xe9515881…311a8, USDC 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 (6dp) — all from
+// f1a-payment-links/DEPLOY-PREP.md. The QR block above is payme/index.html's, byte-identical (#131).
+// ══════════════════════════════════════════════════════════════════════════════════════════
+"use strict";
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+
+
+const CFG = {
+  chainId: 8453,
+  rpc: "https://base-rpc.publicnode.com",
+  requestRegistry: "0xeD395024Bba719564bec617b6b42CF6fDC8a252c",
+  feeContract:     "0x417c41d406c61E09958032Cd77338fc1F1ac7D45",
+  usdc: { sym:"USDC", dec:6, addr:"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" },
+  // NO bakedFeeBps (S4-4 ← S3-3), same as payme/join: feeBps() on the fee contract is the primary
+  // truth; if it faults the TollRegistry's toll() for this rail is a genuine SECOND SOURCE (a chain
+  // read, not a constant); if BOTH fault the page says "unreachable" and carries a retry. The key is
+  // keccak-derived from the rail name below, never typed as a hash. Address: g4c DEPLOY-EVIDENCE.md.
+  tollRegistry: "0xc8319D6fbc0A8f1685Df9c567557141A289b7A1b",
+  productKey: "p2-forwarder",   // the rail this invoice settles through: the p2 forwarder + its Registry
+  pageBase: "https://dngr2.github.io/dex-products/f1a-payment-links/invoice/",
+  homeLink: "https://dngr2.github.io/dex-products/",
+};
+const SEL = {
+  feeBps: "0x24a9d853",        // feeBps() -> uint16 (on the fee contract == p2 Registry)
+  request: "0xdc0edd60",       // request(address,address,uint256,bytes32) -> (uint256,address)
+  predict: "0xd6d52f00",       // predictDepositFor(address) -> address
+  p2Registry: "0x7d0f1201",    // p2Registry() -> address
+  toll: "0x71a41241",          // toll(bytes32) -> (address,uint16,bool) on the TollRegistry (S4-4 2nd source)
+};
+
+const strip0x = (h) => (h||"").replace(/^0x/i,"").toLowerCase();
+const wordAddr = (a) => strip0x(a).padStart(64,"0");
+const wordUint = (v) => BigInt(v).toString(16).padStart(64,"0");
+const shortAddr = (a) => a ? a.slice(0,6)+"…"+a.slice(-4) : "";
+const esc = (s) => String(s==null?"":s).replace(/[&<>"]/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const $ = (id) => document.getElementById(id);
+const setText = (id,t) => { const e=$(id); if(e) e.textContent=t; };
+const show = (id,on) => { const e=$(id); if(e) e.classList[on?"remove":"add"]("hide"); };
+
+// ── EIP-681: token @ chain / transfer ? address=&uint256=  (checked; EIP-681 grammar) ─────────
+function eip681Usdc(toAddr, amountUnits){
+  return `ethereum:${CFG.usdc.addr}@${CFG.chainId}/transfer?address=${toAddr}&uint256=${amountUnits}`;
+}
+
+// ── the invoice object <-> fragment (base64url of compact JSON; the document IS the URL) ─────
+function encodeInvoice(obj){
+  const bytes = new TextEncoder().encode(JSON.stringify(obj));
+  let b64 = btoa(String.fromCharCode.apply(null, bytes)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+  return b64;
+}
+function decodeInvoice(b64){
+  try {
+    let s = b64.replace(/-/g,"+").replace(/_/g,"/"); while (s.length % 4) s += "=";
+    const bin = atob(s), bytes = new Uint8Array(bin.length);
+    for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch(e){ return null; }
+}
+
+// ── human <-> base units (bigint, never float) ───────────────────────────────────────────────
+function parseHuman(str, dec){
+  str = String(str==null?"":str).trim().replace(/^\$/,"");
+  if (!str) return 0n;
+  if (!/^\d*\.?\d*$/.test(str)) throw new Error("not a number");
+  const [w,f=""] = str.split(".");
+  return BigInt(w||"0")*(10n**BigInt(dec)) + BigInt((f+"0".repeat(dec)).slice(0,dec)||"0");
+}
+function fmtUnits(u, dec){
+  u = BigInt(u); const s = u.toString().padStart(dec+1,"0");
+  const whole = s.slice(0,s.length-dec), frac = s.slice(s.length-dec).replace(/0+$/,"");
+  return whole + (frac ? "."+frac : "");
+}
+const itemU = (it, dec) => parseHuman(it.u, dec) * BigInt(it.q||1);      // line total in base units
+function totalU(inv, dec){ let t=0n; for (const it of inv.items||[]) t += itemU(it, dec); return t; }
+// the amount the payer SENDS: pass => client covers the toll on top; gross => payee absorbs it.
+function payU(inv, dec, bps){ const t = totalU(inv,dec); const fee=(t*BigInt(bps))/10000n; return inv.fee==="pass" ? t+fee : t; }
+
+// ── RPC (tri-state: a JSON-RPC error and a transport fault are DIFFERENT evidence) ───────────
+async function rpc(method, params){
+  let res;
+  try { res = await _fetchT(CFG.rpc, {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({jsonrpc:"2.0",id:1,method,params})}); }
+  catch(e){ throw new Error("transport: "+(e&&e.message?e.message:e)); }
+  if (!res.ok) throw new Error("http "+res.status);
+  const j = await res.json();
+  if (j.error) throw new Error("rpc: "+(j.error.message||JSON.stringify(j.error)));
+  if (j.result == null) throw new Error("rpc: null result");
+  return j.result;
+}
+const ethCall = (to,data) => rpc("eth_call",[{to,data},"latest"]);
+const asAddr = (hex) => "0x"+strip0x(hex).slice(24);
+const asUint = (hex) => BigInt(hex);
+
+const LIVE = { ok:false, why:"", feeBps:null, deposit:null, chainId:null };
+async function liveCheck(){
+  try {
+    const cid = Number(BigInt(await rpc("eth_chainId",[])));
+    if (cid !== CFG.chainId) throw new Error("wrong chain "+cid);
+    const p2 = asAddr(await ethCall(CFG.requestRegistry, SEL.p2Registry));
+    if (p2.toLowerCase() !== CFG.feeContract.toLowerCase()) throw new Error("p2Registry()!="+CFG.feeContract);
+    const bps = Number(asUint(await ethCall(CFG.feeContract, SEL.feeBps)) % (1n<<16n));
+    Object.assign(LIVE,{ok:true,why:"",feeBps:bps,chainId:cid});
+  } catch(e){
+    // the fee-contract read faulted. Try the SECOND SOURCE before giving up: a live registry read beats
+    // a BAKED constant. Both faulted -> feeBps stays null and the page says unreachable.
+    const t = await readTollBps();
+    Object.assign(LIVE,{ok:false,why:String(e&&e.message?e.message:e),feeBps:t});
+  }
+  return LIVE.ok;
+}
+// ── keccak256 (Ethereum), pure JS — COPY-SHAPED from payme/join, used ONLY to derive the registry
+//    product KEY from its rail name so the key is never a typed hash (GOTCHA #73/#95) ────────────
+const MASK = (1n << 64n) - 1n;
+const RC = [0x1n,0x8082n,0x800000000000808an,0x8000000080008000n,0x808bn,0x80000001n,0x8000000080008081n,0x8000000000008009n,0x8an,0x88n,0x80008009n,0x8000000an,0x8000808bn,0x800000000000008bn,0x8000000000008089n,0x8000000000008003n,0x8000000000008002n,0x8000000000000080n,0x800an,0x800000008000000an,0x8000000080008081n,0x8000000000008080n,0x80000001n,0x8000000080008008n];
+const ROT = [[0,36,3,41,18],[1,44,10,45,2],[62,6,43,15,61],[28,55,25,21,56],[27,20,39,8,14]];
+function rol(x, n){ n %= 64n; return ((x << n) | (x >> (64n - n))) & MASK; }
+function keccakF(A){ for (let r=0;r<24;r++){ const Cc=[0n,0n,0n,0n,0n],D=[0n,0n,0n,0n,0n];
+  for (let x=0;x<5;x++) Cc[x]=A[x][0]^A[x][1]^A[x][2]^A[x][3]^A[x][4];
+  for (let x=0;x<5;x++) D[x]=Cc[(x+4)%5]^rol(Cc[(x+1)%5],1n);
+  for (let x=0;x<5;x++) for (let y=0;y<5;y++) A[x][y]^=D[x];
+  const B=[[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n]];
+  for (let x=0;x<5;x++) for (let y=0;y<5;y++) B[y][(2*x+3*y)%5]=rol(A[x][y],BigInt(ROT[x][y]));
+  for (let x=0;x<5;x++) for (let y=0;y<5;y++) A[x][y]=B[x][y]^((~B[(x+1)%5][y])&B[(x+2)%5][y]&MASK);
+  A[0][0]^=RC[r]; } }
+function hexToBytes(h){ h=h.replace(/^0x/,""); const o=new Uint8Array(h.length/2); for (let i=0;i<o.length;i++) o[i]=parseInt(h.substr(i*2,2),16); return o; }
+function bytesToHex(b){ return "0x"+[...b].map(x=>x.toString(16).padStart(2,"0")).join(""); }
+function keccak256(input){ const msg=typeof input==="string"?hexToBytes(input):input; const rate=136,P=0x01,S=0x80;
+  const padLen=rate-(msg.length%rate); const pad=new Uint8Array(padLen); pad[0]=P; pad[pad.length-1]|=S;
+  const buf=new Uint8Array(msg.length+pad.length); buf.set(msg); buf.set(pad,msg.length);
+  const A=[[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n]];
+  for (let off=0;off<buf.length;off+=rate){ for (let i=0;i<rate/8;i++){ let lane=0n; for (let b=7;b>=0;b--) lane=(lane<<8n)|BigInt(buf[off+i*8+b]); A[i%5][(i/5)|0]^=lane; } keccakF(A); }
+  const out=new Uint8Array(32); for (let i=0;i<4;i++){ let lane=A[i%5][(i/5)|0]; for (let b=0;b<8;b++){ out[i*8+b]=Number(lane&0xffn); lane>>=8n; } } return bytesToHex(out); }
+const utf8Hex = (s) => bytesToHex(new TextEncoder().encode(s));
+const tollKey = () => keccak256(utf8Hex(CFG.productKey));   // keccak-derived, never typed
+
+// S4-4 SECOND SOURCE: the deployed registry's toll for this rail. feeBps() is the primary truth; a
+// toll() read is still the CHAIN, not a constant. null on a fault (unregistered key / dead RPC).
+async function readTollBps(){
+  try {
+    const raw = await ethCall(CFG.tollRegistry, SEL.toll + tollKey().replace(/^0x/, ""));
+    return Number(BigInt("0x" + strip0x(raw).slice(64,128)) % (1n<<16n));   // (recipient, feeBps, live) -> word #2
+  } catch(e){ return null; }
+}
+// the fee the UI shows: the fee-contract read, else the registry's live toll, else null (unreachable).
+// The SOURCE is always named so the page never dresses one read as the other.
+function feeDisplay(){
+  if (LIVE.ok && LIVE.feeBps != null) return { bps: LIVE.feeBps, src: "fee-contract" };
+  if (LIVE.feeBps != null)            return { bps: LIVE.feeBps, src: "registry" };
+  return { bps: null, src: null };
+}
+const feeBpsNow = () => { const f = feeDisplay(); return f.bps; };
+async function predictDeposit(to){ return asAddr(await ethCall(CFG.requestRegistry, SEL.predict+wordAddr(to))); }
+function setDot(kind,text){ const d=$("dot"); if(d) d.className="dot"+(kind?" "+kind:""); if(text!=null) setText("status",text); }
+// the boot health line: names which source answered, and the both-faulted state honestly.
+function paintHealth(){
+  const f = feeDisplay();
+  if (LIVE.ok) setDot("ok", "Live · registry reachable · fee "+LIVE.feeBps+" bps");
+  else if (f.src === "registry") setDot("bad", "fee contract read faulted — fee from the toll registry's live toll, not a baked number");
+  else setDot("bad", "UNREACHABLE — fee contract and registry both faulted; press retry");
+}
+
+// ── render: BUILDER (no #i=) ─────────────────────────────────────────────────────────────────
+function renderBuilder(){
+  $("root").innerHTML =
+    `<header><span class="dot" id="dot"></span><h1>New invoice</h1><span class="badge">static · no deps</span></header>
+     <p class="sub">Fill this to make a hosted, payable invoice. The invoice is encoded into the URL — <b>no account, no server</b>. Send the link; the payer pays in one tap.</p>
+     <label for="to">Get paid to (your wallet)</label>
+     <input id="to" placeholder="0x…" spellcheck="false" autocomplete="off" value="">
+     <label for="from">From (your business name, optional)</label>
+     <input id="from" placeholder="Acme Ltd" autocomplete="off">
+     <label for="memo">Memo / reference</label>
+     <input id="memo" placeholder="Figma-Sept" autocomplete="off">
+     <label for="itemsBox">Line items — one per line: <span class="mono">description | qty | unit $</span></label>
+     <textarea id="itemsBox" rows="4">Logo design | 1 | 400
+Revisions | 3 | 100</textarea>
+     <label for="due">Due date</label>
+     <input id="due" type="date">
+     <label>Fee</label>
+     <div class="toggle" id="feetog">
+       <span class="chip on" data-fee="pass">Client pays the 5% on top</span>
+       <span class="chip" data-fee="gross">I absorb the 5%</span>
+     </div>
+     <div class="fee" id="fee">Fee: <b><span id="feebps">reading…</span></b> <span class="chip" id="feeretry" title="re-read the chain">retry</span> — read live off the chain. <span class="mono">pass</span>: the payer sends total+toll; <span class="mono">gross</span>: you receive total−toll.</div>
+     <button id="go" class="wide">Build the invoice</button>
+     <p class="err hide" id="err"></p>
+     <p class="foot" id="status">Checking the live registry…</p>
+     <div id="result" class="hide"></div>`;
+  let feeMode = "pass";
+  for (const c of document.querySelectorAll("#feetog .chip")){
+    c.onclick = () => { feeMode = c.getAttribute("data-fee");
+      document.querySelectorAll("#feetog .chip").forEach(x=>x.classList.toggle("on", x===c)); };
+  }
+  $("go").onclick = () => onBuild(feeMode);
+  if ($("feeretry")) $("feeretry").onclick = retryFee;
+  paintFee();
+}
+// the fee chip always names its source; null means BOTH reads faulted and nothing is invented.
+function paintFee(){
+  const f = feeDisplay();
+  setText("feebps", f.src === "fee-contract" ? (f.bps + " bps — live")
+                 : f.src === "registry"     ? (f.bps + " bps — live (via toll registry; fee-contract read faulted)")
+                 : "unreachable — retry");
+}
+async function retryFee(){ setText("feebps","reading…"); await liveCheck(); paintFee(); paintHealth(); }
+function parseItems(text){
+  const out = [];
+  for (const line of String(text||"").split("\n")){
+    if (!line.trim()) continue;
+    const parts = line.split("|").map(s=>s.trim());
+    if (parts.length < 3) continue;
+    const u = parts[2].replace(/^\$/,"");
+    if (!/^\d*\.?\d*$/.test(u) || u==="") continue;
+    out.push({ d: parts[0]||"item", q: Math.max(1, parseInt(parts[1]||"1",10)||1), u });
+  }
+  return out;
+}
+async function onBuild(feeMode){
+  setText("err",""); show("err",false); show("result",false);
+  const to = $("to").value.trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(to)){ setErr("Get-paid-to must be a 0x… 40-hex address"); return; }
+  const items = parseItems($("itemsBox").value);
+  if (!items.length){ setErr("Add at least one line item, e.g.  Logo | 1 | 400"); return; }
+  const inv = { v:1, chain:CFG.chainId, cur:CFG.usdc.sym, to, from:$("from").value.trim(),
+                memo:$("memo").value.trim(), items, fee:feeMode, due:$("due").value||"" };
+  const frag = encodeInvoice(inv);
+  const url = CFG.pageBase + "#i=" + frag;
+  const box = $("result");
+  box.innerHTML =
+    `<div class="warnbox">This URL <b>is</b> the invoice — no account, no server. Send it to anyone.</div>
+     <span class="depaddr mono" id="urltxt">${esc(url)}</span>
+     <div class="chips"><span class="chip" id="copyurl">copy invoice link</span><span class="chip" id="openurl">open it</span></div>
+     <div class="qrbox" style="margin-top:14px">${qrHTML(url, 200)}</div>
+     <div class="foot">scan to open the hosted invoice on a phone</div>
+     <p class="foot" id="livejs"></p>`;
+  show("result", true);
+  try { drawQRs(box); } catch(e){}
+  $("copyurl").onclick = () => copy(url,"copyurl");
+  $("openurl").onclick = () => { location.href = url; };
+  setText("status","Invoice built. It lives entirely in the link.");
+}
+
+// ── render: HOSTED (has #i=) — the payer's view ─────────────────────────────────────────────
+let currentInv = null;
+async function renderHosted(inv){
+  currentInv = inv;
+  const dec = CFG.usdc.dec;
+  const bps = feeBpsNow();   // null only if BOTH sources faulted
+  const bpsTxt = bps == null ? "?" : bps;
+  const items = inv.items||[];
+  const tot = totalU(inv, dec);
+  const pay = payU(inv, dec, bps);
+  const feeU = bps == null ? 0n : (tot*BigInt(bps))/10000n;
+
+  let rows = "";
+  for (const it of items){
+    const line = itemU(it, dec);
+    rows += `<tr><td>${esc(it.d)}</td><td>${esc(it.q||1)}</td><td>${esc("$"+it.u)}</td><td>$${esc(fmtUnits(line,dec))}</td></tr>`;
+  }
+  // due state (from the date only — no server)
+  let dueBadge = "";
+  if (inv.due){ const today = new Date().toISOString().slice(0,10);
+    const overdue = inv.due < today; dueBadge = overdue
+      ? `<span class="badge due">overdue</span>` : `<span class="badge">due ${esc(inv.due)}</span>`; }
+
+  $("root").innerHTML =
+    `<header><span class="dot" id="dot"></span><h1>Invoice${inv.memo?" · "+esc(inv.memo):""}</h1><span class="badge" id="paybadge">unpaid</span>${dueBadge}</header>
+     <p class="meta">${inv.from?esc(inv.from)+" · ":""}to <span class="mono">${esc(shortAddr(inv.to))}</span> · USDC on Base</p>
+     <table class="items"><thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table>
+     <div class="tot"><span>Total</span><span>$${esc(fmtUnits(tot,dec))} USDC</span></div>
+     ${inv.fee==="pass"
+        ? `<p class="meta" style="text-align:right">+ ${bpsTxt} bps fee (${esc(fmtUnits(feeU,dec))} USDC) — client pays it on top</p>
+           <div class="tot"><span>You pay</span><span>$${esc(fmtUnits(pay,dec))} USDC</span></div>`
+        : `<p class="meta" style="text-align:right">− ${bpsTxt} bps fee (${esc(fmtUnits(feeU,dec))} USDC) absorbed</p>`}
+     <div class="pay">
+       <div class="qrbox" id="qrw"></div>
+       <div class="foot" style="margin-top:8px">Scan with any wallet — pays USDC to the deposit address.<br><b>TRANSFER here — no approve needed</b> (a plain sink, not a pull address).</div>
+       <span class="depaddr mono" id="depaddr">reading the registry…</span>
+       <div class="chips">
+         <span class="chip" id="copydep">copy deposit address</span>
+         <span class="chip" id="copylink">copy pay link</span>
+         <span class="chip" id="copymeta">copy EIP-681 URI</span>
+       </div>
+       <div id="receipt" class="hide"></div>
+     </div>
+     <p class="foot" id="status">Reading the live registry…</p>`;
+  $("footbar").innerHTML = `paid via <a href="${CFG.homeLink}" target="_blank" rel="noopener">DEX fleet</a> · non-custodial · fee ${esc(String(bpsTxt))} bps, read live`;
+
+  // derive the deposit address + build the EIP-681 QR (needs RPC; offline => labelled, not invented)
+  try {
+    const dep = await predictDeposit(inv.to);
+    LIVE.deposit = dep;
+    const eip = eip681Usdc(dep, pay);
+    const qw = $("qrw");
+    qw.innerHTML = qrHTML(eip, 220); try { drawQRs(qw); } catch(e){}
+    setText("depaddr", dep);
+    $("copydep").onclick = () => copy(dep,"copydep");
+    $("copylink").onclick = () => copy(location.href,"copylink");
+    $("copymeta").onclick = () => copy(eip,"copymeta");
+    setDot("ok","Deposit address derived live (predictDepositFor). Fee "+bps+" bps. Waiting for payment…");
+    watchPaid(dep);
+  } catch(e){
+    setDot("bad","UNREACHABLE ("+(e&&e.message?e.message:e)+") — deposit address needs the RPC; not invented.");
+    setText("depaddr","(needs RPC)");
+  }
+}
+
+// ── receipt-on-payment: READ THE CHAIN, never a server ───────────────────────────────────────
+async function watchPaid(dep){
+  const poll = async () => {
+    try {
+      const bal = asUint(await ethCall(CFG.usdc.addr, "0x70a08231"+wordAddr(dep)));   // balanceOf(dep)
+      if (bal > 0n){
+        const b = $("paybadge"); if (b){ b.textContent = "paid"; b.className = "badge paid"; }
+        const r = $("receipt");
+        if (r){ r.className = "paidbox"; r.innerHTML =
+          `<b>Paid ✓</b> — ${esc(fmtUnits(bal, CFG.usdc.dec))} USDC received at the deposit address. ` +
+          `The forwarder sweeps it to <span class="mono">${esc(shortAddr(currentInv.to))}</span> within ~1 block. ` +
+          `<span class="mono">dep ${esc(shortAddr(dep))} · fee ${esc(String(feeBpsNow()))} bps</span>`; }
+        setDot("ok","PAID — "+fmtUnits(bal,CFG.usdc.dec)+" USDC seen on chain.");
+        clearInterval(h); return;
+      }
+    } catch(e){ /* keep last state; a transient RPC blip is not a state change */ }
+    setTimeout(poll, 6000);
+  };
+  const h = setInterval(()=>{}, 1<<30);   // placeholder so clearInterval works; poll self-schedules
+  poll();
+}
+
+function setErr(t){ if(t){ show("err",true); setText("err",t);} else show("err",false); }
+function copy(text, id){
+  const done = () => { const e=$(id); if(e){ const o=e.textContent; e.textContent=o+" ✓"; setTimeout(()=>{e.textContent=e.textContent.replace(" ✓","");},1200);} };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(()=>selCopy(text,done)());
+  else selCopy(text,done)();
+}
+function selCopy(t,done){ return () => { try{ const a=document.createElement("textarea"); a.value=t; document.body.appendChild(a); a.select(); document.execCommand("copy"); a.remove(); }catch(e){} done(); }; }
+
+// ── boot ─────────────────────────────────────────────────────────────────────────────────────
+async function main(){
+  const frag = (location.hash||"").replace(/^#/,"");
+  const q = new URLSearchParams(frag);
+  const raw = q.get("i");
+  if (!raw){
+    await liveCheck(); renderBuilder();
+    paintHealth();
+    document.title = "New invoice — get paid in USDC on Base";
+    return;
+  }
+  const inv = decodeInvoice(raw);
+  if (!inv || !inv.to){ $("root").innerHTML = `<header><span class="dot bad"></span><h1>Bad invoice link</h1></header><p class="sub">The #i= fragment did not decode to an invoice.</p>`; return; }
+  currentInv = inv;
+  document.title = "Invoice"+(inv.memo?" "+inv.memo:"")+" — "+fmtUnits(totalU(inv,CFG.usdc.dec),CFG.usdc.dec)+" USDC";
+  await liveCheck();
+  await renderHosted(inv);
+}
+
+if (typeof window !== "undefined"){
+  window.__invoice = { CFG, SEL, encodeInvoice, decodeInvoice, eip681Usdc, parseHuman, fmtUnits, totalU, payU, parseItems, LIVE };
+}
+if (typeof document !== "undefined" && document.getElementById) main();
+</script>
+
+<div class="dx-foot">
+  <div class="dx-foot-in">
+    <div class="dx-foot-brand"><a href="../../index.html">← DEX fleet</a>
+      <span>truth-only · every number read on-chain</span></div>
+    <nav class="dx-foot-nav" aria-label="All pages"><a href="../../subscribe/index.html">Subscriptions</a><a href="../../merchant/index.html">For merchants</a><a href="../../g2b-escrow/index.html">Escrow</a><a href="../../g2a-streams/index.html">Streams</a><a href="../../f1a-payment-links/index.html">Payment links</a><a href="../../p2-forwarder/index.html">Forwarder</a><a href="../../p3-router/index.html">Swap router</a><a href="../../g4b-receipts/index.html">Receipts</a><a href="../../g3a-sponsorship/index.html">Gasless</a><a href="../../f1c-duster/index.html">Dust → USDC</a><a href="../../miniapp/index.html">Pay in-feed</a><a href="../../fleet-executor/index.html">Executor</a><a href="../../status/index.html">Status</a><a href="../../security/index.html">Security</a><a href="../../changelog/index.html">Changelog</a></nav>
+  </div>
+</div>
+</body>
+</html>

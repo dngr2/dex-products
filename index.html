@@ -1,0 +1,674 @@
+<!doctype html>
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Get paid on a schedule — non-custodial, on Base</title>
+<meta name="theme-color" content="#1f6feb">
+<link rel="icon" type="image/svg+xml" href="_assets/favicon.svg">
+<meta name="description" content="Small repeat payments without a platform holding the money. One approval becomes N scheduled laps. The fee is read live on-chain — no wallet needed to inspect.">
+<meta property="og:type" content="website">
+<!-- absolute URLs: social crawlers (Farcaster/Twitter) do not resolve relative og:image paths -->
+<meta property="og:url" content="https://dngr2.github.io/dex-products/">
+<meta property="og:site_name" content="DEX fleet">
+<meta property="og:title" content="Get paid on a schedule. Without the platform in the middle.">
+<meta property="og:description" content="One approval, N laps, non-custodial, on Base. The fee is read live on-chain.">
+<meta property="og:image" content="https://dngr2.github.io/dex-products/_assets/og-card.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Get paid on a schedule. Without the platform in the middle.">
+<meta name="twitter:description" content="One approval, N laps, non-custodial, on Base. The fee is read live on-chain.">
+<meta name="twitter:image" content="https://dngr2.github.io/dex-products/_assets/og-card.jpg">
+<style>
+  :root{
+    --fg:#e9eefb; --mut:#8fa0be; --bg:#05080f; --card:#0b1222; --line:#18233a;
+    --acc:#4d94ff; --acc-soft:rgba(77,148,255,.10); --acc-line:rgba(77,148,255,.38);
+    --ok:#34d399; --warn:#fbbf24; --bad:#f87171; --chip:#111a2c;
+    --r:14px; --r-sm:10px;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%;background:var(--bg)}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:16px/1.6 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+       font-feature-settings:"tnum" 1}
+  .wrap{max-width:760px;margin:0 auto;padding:0 20px 72px;position:relative;z-index:1}
+  .bgfx{position:fixed;inset:0;z-index:0;pointer-events:none;
+        background:url("_assets/hero-wide.webp") right top/1280px auto no-repeat,
+                   radial-gradient(1200px 620px at 82% 2%, rgba(77,148,255,.20), transparent 64%),
+                   radial-gradient(900px 500px at 12% 40%, rgba(31,111,235,.10), transparent 60%),
+                   var(--bg);}
+  .bgfx::after{content:"";position:absolute;inset:0;
+        background:linear-gradient(180deg, rgba(5,8,15,.42) 0%, rgba(5,8,15,.70) 40%, rgba(5,8,15,.92) 66%, var(--bg) 88%);}
+  @media (max-width:640px){
+    .bgfx{background:url("_assets/hero-tall.webp") 78% top/900px auto no-repeat,
+                     radial-gradient(900px 520px at 70% 0%, rgba(77,148,255,.20), transparent 64%),
+                     var(--bg);}
+    .bgfx::after{background:linear-gradient(180deg, rgba(5,8,15,.58) 0%, rgba(5,8,15,.82) 44%, var(--bg) 84%);}
+  }
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.94em}
+  a{color:var(--acc)}
+
+  /* ── nav ───────────────────────────────────────────────────────────────── */
+  .nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 0}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:750;letter-spacing:-.01em;font-size:15px}
+  .brand img{width:22px;height:22px}
+  .navlinks{display:flex;gap:16px;font-size:14px}
+  .navlinks a{color:var(--mut);text-decoration:none;font-weight:600}
+  .navlinks a:hover{color:var(--fg)}
+
+  /* ── hero ──────────────────────────────────────────────────────────────── */
+  .hero{padding:28px 0 8px;border-top:1px solid var(--line);margin-top:8px}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;
+          color:var(--mut);text-transform:uppercase;letter-spacing:.07em;margin-bottom:16px}
+  .kicker .dot{width:8px;height:8px;border-radius:50%;background:var(--mut);flex:0 0 auto}
+  .kicker .dot.ok{background:var(--ok);box-shadow:0 0 0 4px rgba(52,211,153,.18)}
+  .kicker .dot.bad{background:var(--bad);box-shadow:0 0 0 4px rgba(248,113,113,.18)}
+  h1{margin:0;font-size:clamp(30px,6.2vw,44px);line-height:1.08;letter-spacing:-.028em;font-weight:800}
+  h1 em{font-style:normal;color:var(--acc)}
+  .lede{margin:18px 0 0;font-size:clamp(16px,2.3vw,18.5px);line-height:1.58;color:#c3cee4;max-width:600px}
+  .lede b{color:var(--fg);font-weight:650}
+
+  .ctas{display:flex;gap:12px;flex-wrap:wrap;margin:28px 0 0}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:13px 20px;border-radius:var(--r-sm);
+       font-size:15.5px;font-weight:700;text-decoration:none;border:1px solid transparent;
+       transition:transform .06s ease, background .15s ease}
+  .btn:active{transform:translateY(1px)}
+  .btn-p{background:var(--acc);color:#05080f;box-shadow:0 1px 2px rgba(0,0,0,.4),0 0 0 1px rgba(77,148,255,.5),0 8px 24px rgba(31,111,235,.28)}
+  .btn-p:hover{background:#6aa6ff}
+  .btn-s{background:rgba(255,255,255,.04);color:var(--fg);border-color:var(--line)}
+  .btn-s:hover{border-color:rgba(77,148,255,.5);background:rgba(77,148,255,.08)}
+  .btn-note{font-size:13px;color:var(--mut);align-self:center;margin-left:2px}
+
+  /* ── trust row ─────────────────────────────────────────────────────────── */
+  .trust{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);
+         border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin:40px 0 0}
+  .trust .t{background:var(--card);padding:16px 18px}
+  .trust .th{font-size:11.5px;font-weight:750;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin-bottom:7px}
+  .trust .tv{font-size:14.5px;font-weight:600;line-height:1.45}
+  .trust .tv .big{font-size:19px;font-weight:800;letter-spacing:-.01em}
+  .trust .tv .sub{display:block;font-size:12.5px;font-weight:500;color:var(--mut);margin-top:4px}
+  .trust a{font-weight:650;text-decoration:none}
+  .trust a:hover{text-decoration:underline}
+  .state-ok{color:var(--ok)} .state-bad{color:var(--bad)}
+
+  /* verified line — a calm trust signal under the trust row, not a badge wall */
+  .verif{font-size:12.5px;color:var(--mut);line-height:1.6;margin:12px 2px 0}
+  .verif b{color:var(--fg)}
+  .verif a{font-weight:650;text-decoration:none}
+  .verif a:hover{text-decoration:underline}
+  .verif .sub{color:var(--mut);opacity:.85}
+
+  /* ── sections ──────────────────────────────────────────────────────────── */
+  section{margin:56px 0 0}
+  h2{font-size:12.5px;font-weight:750;text-transform:uppercase;letter-spacing:.08em;
+     color:var(--mut);margin:0 0 20px}
+  .flow{counter-reset:s;display:grid;gap:14px;margin:0;padding:0;list-style:none}
+  .flow li{counter-increment:s;position:relative;padding:16px 18px 16px 56px;background:var(--card);
+           border:1px solid var(--line);border-radius:var(--r-sm);font-size:15px;line-height:1.55}
+  .flow li::before{content:counter(s);position:absolute;left:18px;top:15px;width:24px;height:24px;
+           border-radius:50%;background:var(--acc-soft);border:1px solid var(--acc-line);color:var(--acc);
+           font-size:13px;font-weight:800;display:flex;align-items:center;justify-content:center}
+  .flow b{font-weight:700}
+  .flow .tm{font-size:12.5px;color:var(--mut);font-weight:600;margin-left:6px}
+
+  .proof{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+  .proof .p{background:var(--card);padding:18px 20px;display:grid;grid-template-columns:22px 1fr;gap:14px}
+  .proof .ic{width:22px;height:22px;border-radius:50%;background:var(--acc-soft);color:var(--acc);
+             display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;margin-top:1px}
+  .proof .pt{font-weight:700;font-size:15px;margin-bottom:3px}
+  .proof .pd{font-size:14px;color:#a9b7d0;line-height:1.55}
+  .proof code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em;
+              background:var(--chip);border-radius:5px;padding:1px 5px}
+
+  .honest{background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.28);border-radius:var(--r-sm);
+          padding:16px 18px;font-size:14px;line-height:1.6;color:#e7d6a8}
+  .honest b{color:#fcd34d}
+  .honest ul{margin:8px 0 0;padding-left:20px}
+  .honest li{margin:5px 0}
+
+  /* ── the rest of the fleet (secondary to the product above) ─────────────── */
+  .others{display:grid;gap:10px}
+  .others a{display:block;text-decoration:none;color:inherit;background:var(--card);
+            border:1px solid var(--line);border-radius:var(--r-sm);padding:13px 16px}
+  .others a:hover{border-color:rgba(77,148,255,.5)}
+  .others .ot{font-weight:700;font-size:14.5px}
+  .others .ow{font-size:13px;color:var(--mut);margin-top:2px;line-height:1.5}
+  .others .of{font-size:12px;color:var(--mut);margin-top:6px}
+  .others .of b{color:var(--fg);font-weight:650}
+
+  /* ── door 3 — build / automate: agent + developer surfaces (5 deployed, sdk/mcp source-only) ─── */
+  .buildnote{font-size:13.5px;color:#a9b7d0;line-height:1.6;margin:0 0 16px;max-width:640px}
+  .buildnote em{font-style:normal;color:var(--fg);font-weight:650}
+  .others .ob{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.03em;color:var(--warn);
+              background:rgba(251,191,36,.09);border:1px solid rgba(251,191,36,.28);
+              border-radius:5px;padding:1px 6px;margin-left:8px;vertical-align:middle}
+  .others .ob.obok{color:var(--ok);background:rgba(52,211,153,.09);border-color:rgba(52,211,153,.3)}
+  .others .ov{font-size:12px;color:var(--acc);margin-top:7px}
+  .others .ov .mono{color:var(--mut)}
+  .door{margin-top:16px;background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);
+        padding:16px 18px;font-size:13.5px;line-height:1.7}
+  .door .dh{font-weight:750;font-size:14px;margin-bottom:10px}
+  .door .drow{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline;margin:6px 0}
+  .door .dk{flex:0 0 auto;min-width:88px;font-size:11.5px;font-weight:700;text-transform:uppercase;
+            letter-spacing:.05em;color:var(--mut)}
+  .door code, .door .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em;
+            background:var(--chip);border-radius:5px;padding:1px 5px}
+  .door a{font-weight:650;text-decoration:none}
+  .door a:hover{text-decoration:underline}
+
+  footer{margin-top:60px;border-top:1px solid var(--line);padding-top:22px;
+         font-size:13px;color:var(--mut);line-height:1.65}
+  footer .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:baseline;margin:7px 0}
+  footer .lbl{font-weight:700;color:var(--fg);flex:0 0 auto;min-width:96px;font-size:12px;
+              text-transform:uppercase;letter-spacing:.05em}
+  footer .a{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;
+            word-break:break-all;color:var(--fg)}
+  footer .truth{margin-top:18px;padding-top:16px;border-top:1px dashed var(--line);font-size:12.5px}
+  footer .truth b{color:var(--fg)}
+  footer .verb{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:none;padding:1px 6px;border-radius:999px;border:1px solid var(--line)}
+  footer .verb.pull{color:var(--warn);background:rgba(251,191,36,.12);border-color:rgba(251,191,36,.4)}
+  footer .verb.sink{color:var(--mut);background:var(--chip)}
+  footer .verbnote{margin-top:12px;font-size:12.5px;line-height:1.6;background:var(--chip);border:1px solid var(--line);border-radius:8px;padding:9px 11px}
+
+  @media (max-width:600px){
+    .wrap{padding:0 16px 56px}
+    .navlinks{display:none}
+    .trust{grid-template-columns:1fr}
+    .btn{flex:1 1 auto;justify-content:center}
+    .btn-note{flex-basis:100%;text-align:center;margin:2px 0 0}
+  }
+</style>
+<link rel="stylesheet" href="_assets/theme.css">
+
+</head>
+<body>
+<div class="bgfx"></div>
+<div class="wrap">
+
+  <div class="nav">
+    <div class="brand"><img src="_assets/favicon.svg" alt="" width="22" height="22">DEX fleet</div>
+    <nav class="navlinks">
+      <a href="./subscribe/index.html">Subscriptions</a>
+      <a href="./merchant/index.html">For merchants</a>
+      <a href="#how">How it works</a>
+      <a href="#proof">Proof</a>
+    </nav>
+  </div>
+
+  <!-- ── HERO — problem first ───────────────────────────────────────────────── -->
+  <div class="hero">
+    <div class="kicker"><span class="dot" id="hdot"></span><span id="hstate">reading the live contract…</span></div>
+    <h1>Getting paid in small, repeat amounts is harder than it should be.</h1>
+    <p class="lede">A card takes a flat cut that <b>hurts most on small tickets</b>; a platform
+      <b>holds your money</b> between charges. This is the alternative: <b>one approval becomes N scheduled
+      payments</b> — non-custodial, no invoice, no per-period signature. Live on Base.</p>
+
+    <div class="ctas">
+      <a class="btn btn-p" href="./subscribe/index.html">Start a subscription →</a>
+      <a class="btn btn-s" id="ctaContract" href="https://basescan.org/address/0x3882A049ee99B96Ea68DF317713ed76008b9A075" target="_blank" rel="noopener">Read the contract on Basescan ↗</a>
+      <span class="btn-note">no wallet needed to look</span>
+    </div>
+  </div>
+
+  <!-- ── TRUST ROW — every cell is a TRUE, checkable claim ──────────────────── -->
+  <div class="trust">
+    <div class="t">
+      <div class="th">The fee, live on-chain</div>
+      <div class="tv">
+        <span class="big" id="feeBps">—</span> <span class="mono">bps</span>
+        <span class="sub" id="feeState">reading <span class="mono">feeBps()</span>…</span>
+      </div>
+    </div>
+    <div class="t">
+      <div class="th">Who can change it</div>
+      <div class="tv" id="ownerCell">
+        An owner, by a <span class="mono">storage write</span>
+        <span class="sub">capped at <span class="mono" id="maxBps">—</span> bps by the contract</span>
+      </div>
+    </div>
+    <div class="t">
+      <div class="th">Inspect it yourself</div>
+      <div class="tv">
+        <a id="factoryLink" href="https://basescan.org/address/0x3882A049ee99B96Ea68DF317713ed76008b9A075" target="_blank" rel="noopener">Factory on Basescan ↗</a>
+        <span class="sub">plus a real receipt minted from a settled run →<br>
+          <a id="receiptLink" href="https://basescan.org/tx/0x9ad4d88af167ab545c68b19a572759a148e1c6513dde92d0fa4940b72f666ac1" target="_blank" rel="noopener">the mint tx ↗</a></span>
+      </div>
+    </div>
+  </div>
+  <p style="font-size:12.5px;color:var(--mut);margin:10px 2px 0">
+    The fee is <b>not a percentage we promise</b> — it is a number on the contract, read here live.
+    A dead RPC prints <b class="state-bad">UNREACHABLE</b>, never a made-up value.</p>
+
+  <!-- ── VERIFIED — the code on-chain, matched to its source on Sourcify ────── -->
+  <p class="verif">
+    <b>Source-verified.</b> The three front-door contracts are published on Sourcify — the deployed code
+    matches its Solidity source byte-for-byte (<span class="mono">match</span>; the factory reaches
+    <span class="mono">exact_match</span>).
+    <a href="https://repo.sourcify.dev/8453/0x3882A049ee99B96Ea68DF317713ed76008b9A075" target="_blank" rel="noopener">factory</a> ·
+    <a href="https://repo.sourcify.dev/8453/0x4B05fA6aD0Ba0D0120Dce19Ce34dde6d1316C237" target="_blank" rel="noopener">escrow</a> ·
+    <a href="https://repo.sourcify.dev/8453/0xAE5951d25FEDD06aB7e124e91Dac3AC20f5e7cAF" target="_blank" rel="noopener">receipts</a>
+    <span class="sub">(factory is v2.1, deployed 2026-11-10 — the earlier v1/v2 pair stays live, v1 PAUSED)</span>
+  </p>
+
+  <!-- ── FLOW ───────────────────────────────────────────────────────────────── -->
+  <section id="how">
+    <h2>The whole flow, in about 20 seconds</h2>
+    <ol class="flow">
+      <li><b>Pick a ticket and a period.</b> The page reads the live fee and shows you the exact math —
+        what your counterparty receives and what the toll is.<span class="tm">~10s</span></li>
+      <li><b>Sign ONE <span class="mono">approve()</span>.</b> That single transaction is the whole mandate.
+        There is no per-period signature and no new contract to deploy.<span class="tm">~10s</span></li>
+      <li><b>A keeper fires the laps.</b> Each period it calls the already-deployed factory; each lap is its
+        own small vault holding one ticket. A missed period is a <b>hole</b>, not a debt.</li>
+    </ol>
+  </section>
+
+  <!-- ── PROOF — de-jargoned, each row checkable ────────────────────────────── -->
+  <section id="proof">
+    <h2>Why you can check it, not just trust it</h2>
+    <div class="proof">
+      <div class="p"><div class="ic">1</div><div>
+        <div class="pt">Nothing to connect to read it</div>
+        <div class="pd">Every link on this page works read-only. The fee, the owner, the code size —
+          all fetched straight from Base. No wallet, no account, no sign-up.</div></div></div>
+
+      <div class="p"><div class="ic">2</div><div>
+        <div class="pt">We never hold the money</div>
+        <div class="pd">Each period is a separate on-chain vault. Funds sit in that vault, not in our
+          account, and the counterparty withdraws what has vested.</div></div></div>
+
+      <div class="p"><div class="ic">3</div><div>
+        <div class="pt">The fee can't be quietly raised past its cap</div>
+        <div class="pd">It is a storage variable an owner can change — but the contract hard-caps it at
+          <span class="mono" id="maxBps2">—</span> bps. You always read the current value live,
+          so the page can't show you a stale one.</div></div></div>
+
+      <div class="p"><div class="ic">4</div><div>
+        <div class="pt">A real receipt exists, on-chain</div>
+        <div class="pd">A settled payment can mint exactly one receipt NFT to the payer — the proof of
+          payment lives on the chain, not on a server. One is already minted:
+          <a id="receiptLink2" href="https://basescan.org/tx/0x9ad4d88af167ab545c68b19a572759a148e1c6513dde92d0fa4940b72f666ac1" target="_blank" rel="noopener">read the mint tx ↗</a></div></div></div>
+
+      <div class="p"><div class="ic">5</div><div>
+        <div class="pt">You can decide before you sign</div>
+        <div class="pd">Build the mandate first — the page shows the exact
+          <span class="mono">approve()</span> calldata and a QR to hand it to the payer. Nothing is on
+          chain until someone chooses to send it.</div></div></div>
+    </div>
+  </section>
+
+  <!-- ── HONESTY ────────────────────────────────────────────────────────────── -->
+  <section>
+    <h2>What this does <em style="font-style:normal">not</em> claim</h2>
+    <div class="honest">
+      <b>It is early.</b> The contracts are live and were exercised on Base mainnet by our own keys —
+      which puts an honest asterisk on the numbers:
+      <ul>
+        <li>Every run so far is <b>fleet-internal</b>: the payer and the counterparty are both wallets we
+          control. Money moved and the fee is real, but <b>a stranger's wallet has not paid it yet</b>.</li>
+        <li>There is <b>no "trusted by" logo row</b>, because there is nothing to prove yet. The claims above
+          are all checkable individually instead.</li>
+        <li>Small tickets have a floor: below roughly <b>$0.31</b> a period's fee is smaller than its own gas.
+          The subscription page shows this line and tells you when your ticket is under it.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ── THE REST — kept, but secondary: a product list does not get someone to a first payment -->
+  <section id="all">
+    <h2>Also in the fleet</h2>
+    <div class="others" id="others"></div>
+  </section>
+
+  <!-- ── DOOR 3 — BUILD / AUTOMATE. The surfaces an integrator or an AGENT uses. Rendered from
+       SURFACES (below) rather than the address-carrying PRODUCTS array, so verify.mjs's live-address
+       teeth stay on the front-door products. The five wave-1 contracts are now DEPLOYED (each card
+       carries its address); the SDK and MCP server are source-only. -->
+  <section id="build">
+    <h2>Build or automate</h2>
+    <p class="buildnote">Everything above is a <em>live contract</em> you call directly. These are the
+      <em>things you build with</em> — a typed SDK, an agent MCP server, and the wave-1 base contracts,
+      now <em>deployed live</em> (address on each card, verified by hashing the runtime). The SDK and
+      MCP server are source-only. Every one is non-custodial and has no server in the money path.</p>
+    <div class="others" id="surfaces"></div>
+
+    <div class="door">
+      <div class="dh">Drive it from an agent — one line of config, no npm, no account</div>
+      <div class="drow"><span class="dk">MCP server</span>
+        <span>the <span class="mono">dex-fleet</span> server exposes each rail as one tool — it returns the
+        calldata for the ONE money call and <b>simulates it (dry-run) before anything is signed</b>.
+        One tool per product, plus a live <span class="mono">read_fee</span>.</span></div>
+      <div class="drow"><span class="dk">Agent map</span>
+        <a href="./llms.txt">llms.txt</a> — the whole spec an agent reads, every selector keccak-derived
+        · <a href="./PRODUCTS.json">PRODUCTS.json</a> — the machine-readable catalog</div>
+      <div class="drow"><span class="dk">Install</span>
+        <code>{ "mcpServers": { "dex-fleet": { "command": "python3", "args": ["products/mcp-server/server.py"] } } }</code></div>
+      <div class="drow"><span class="dk">SDK</span>
+        <span><span class="mono">@fleet/sdk</span> — pure <span class="mono">{to,data,value}</span> builders +
+        a viem seam; build call data, simulate, then send. Source:
+        <span class="mono">products/sdk/</span></span></div>
+    </div>
+  </section>
+
+  <!-- ── FOOTER — addresses + truth-only ────────────────────────────────────── -->
+  <footer>
+    <div class="frow"><span class="lbl">Factory<br><span class="verb pull">approve</span></span>
+      <span class="a">0x3882A049ee99B96Ea68DF317713ed76008b9A075</span>
+      <a href="https://basescan.org/address/0x3882A049ee99B96Ea68DF317713ed76008b9A075" target="_blank" rel="noopener">↗</a></div>
+    <div class="frow"><span class="lbl">Receipt NFT</span>
+      <span class="a">0xAE5951d25FEDD06aB7e124e91Dac3AC20f5e7cAF</span>
+      <a href="https://basescan.org/address/0xAE5951d25FEDD06aB7e124e91Dac3AC20f5e7cAF" target="_blank" rel="noopener">↗</a></div>
+    <div class="frow"><span class="lbl">Fee goes to<br><span class="verb sink">transfer ok</span></span>
+      <span class="a" id="treasury">0x5c0fc0917260A0656D253f1625053e3E6Dd2Ef3c</span>
+      <a href="https://basescan.org/address/0x5c0fc0917260A0656D253f1625053e3E6Dd2Ef3c" target="_blank" rel="noopener">↗</a></div>
+    <div class="frow"><span class="lbl">Chain</span><span>Base mainnet (chainId 8453)</span></div>
+
+    <p class="verbnote"><b>Two verbs, don't mix them.</b> The <b>Factory</b> is a <b>pull</b> target — <span class="mono">approve</span>
+      it, never <span class="mono">transfer</span> to it (it funds via <span class="mono">transferFrom</span> and
+      holds nothing, so a bare transfer dead-drops). The <b>Fee goes to</b> is a plain wallet — a
+      <span class="mono">transfer</span> there is fine.</p>
+
+    <div class="truth">
+      <b>Truth-only.</b> Every address here is copied from a record file in the repo, never retyped, and
+      EIP-55 checksummed. All pages are dependency-free static HTML — they open from <span class="mono">file://</span>
+      and from a host identically, and the only network call is the RPC read.
+    </div>
+  </footer>
+</div>
+
+<script src="_assets/lib.js"></script>
+<script>
+"use strict";
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// LANDING — leads with the DEMAND-PULL product (the subscription/metered rail), not a product list.
+// ONE page, ZERO deps, opens from file://. The only network call is the live RPC read.
+//
+// TRUTH RULES: (1) the fee is read LIVE from factory.feeBps(); on a dead RPC the page says
+// UNREACHABLE and shows NO number rather than a stale one. (2) raw bps, never a bare "%".
+// (3) every address copied from a record file (GOTCHA #73), EIP-55 checksummed.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+const CFG = {
+  chainId: 8453,
+  rpc: "https://base-rpc.publicnode.com",            // publicnode answers ACAO:* (mainnet.base.org sends null)
+  factory: "0x3882A049ee99B96Ea68DF317713ed76008b9A075", // g2a-streams v2.1 (deployed 2026-11-10, 16,643 B code, Sourcify exact_match)
+  treasury:"0x5c0fc0917260A0656D253f1625053e3E6Dd2Ef3c", // KEY-RECORD: feeRecipient == factory owner
+};
+try { const _r = new URLSearchParams(location.search).get("rpc"); if (_r) CFG.rpc = _r; } catch (e) {}
+
+const SEL = { feeBps:"0x24a9d853", feeRecipient:"0x46904840", owner:"0x8da5cb5b", maxFeeBps:"0xd55be8c6" };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE OTHER PAGES. Secondary to the hero product, but kept reachable — and the PRODUCTS array is
+// the ONE edit point. `contract` is COPIED from `source_file`; never retype it (GOTCHA #73).
+// verify.mjs parses THIS array: it diffs every address against its source file and the live chain.
+// ─────────────────────────────────────────────────────────────────────────────
+const CHAIN = { name: "Base", id: 8453, explorer: "https://basescan.org" };
+const TREASURY = "0x5c0fc0917260A0656D253f1625053e3E6Dd2Ef3c";
+const SEL_FEE = "0x24a9d853";       // feeBps() — keccak-derived; asserted == cast sig in verify.mjs
+const SEL_MINTFEE = "0x06220534";   // mintFeeWei() — keccak-derived (g4b flat mint fee, in wei)
+
+const PRODUCTS = [
+  { id:"miniapp", tag:"payments", title:"Pay in-feed (Farcaster / Base mini app)",
+    what:"A pay link inside a Farcaster cast or a Base mini app: tap, pay USDC on Base, receipt in the thread. The deposit address is derived live from the P2 Registry's predict(); the fee is read live on-chain.",
+    fee:"500 bps on each forwarded payment (the P2 Registry's fee, paid by the forwarder the link derives)",
+    start:"Open the mini app, paste or make a pay link, tap Pay.",
+    contract:"0x417c41d406c61E09958032Cd77338fc1F1ac7D45", role:"P2 Registry (the mini app derives its deposit address)",
+    source_file:"products/miniapp/README.md" },
+
+  { id:"p2-forwarder", tag:"payments", title:"Micro-payment forwarder",
+    what:"Register once, get a personal deposit address. Anything sent there auto-forwards to YOUR destination within ~1 block.",
+    fee:"500 bps on each forwarded payment — live value in the check below",
+    start:"Open the page, register a destination, share the address it gives you.",
+    contract:"0x417c41d406c61E09958032Cd77338fc1F1ac7D45", role:"Registry",
+    source_file:"products/p2-forwarder/KEY-RECORD.md" },
+
+  { id:"g2b-escrow", tag:"payments", title:"Escrow as a service",
+    what:"Lock a token against a hashlock or a nominated arbiter, share the escrow address; counterparty releases, or the payer refunds after timeout. Funds sit in the escrow contract.",
+    fee:"500 bps on release only, nothing on refund — live value in the check below",
+    start:"Open the page, create a deal, share the escrow link.",
+    contract:"0x4B05fA6aD0Ba0D0120Dce19Ce34dde6d1316C237", role:"EscrowFactory",
+    source_file:"products/g2b-escrow/MAINNET-LIVE.md" },
+
+  { id:"g4b-receipts", tag:"payments", title:"Receipt NFT (proof-of-payment)",
+    what:"When a g2b escrow settles, anyone may mint exactly one on-chain receipt NFT to the payer. tokenURI is fully on-chain (base64 JSON) — no server, no IPFS.",
+    fee:"mintFeeWei = 50000000000000 wei (0.00005 ETH) live; free at deploy",
+    fee_sel:"0x06220534", fee_unit:"wei",
+    start:"Open the page, paste a settled escrow, mint the receipt.",
+    contract:"0xAE5951d25FEDD06aB7e124e91Dac3AC20f5e7cAF", role:"ReceiptNFT",
+    source_file:"products/g4b-receipts/EVIDENCE-mainnet-deploy.md" },
+
+  { id:"p3-router", tag:"trading", title:"Slippage-bounded swap router",
+    what:"Aggregates existing Uniswap V3 + Aerodrome pools (holds no liquidity of its own). Quotes are chosen off-chain; the contract executes the hops it is handed.",
+    fee:"5 bps on input, to the treasury",
+    start:"Open the page, see the per-chain address set and a real quote.",
+    contract:"0x036645cA607Dc8075Ae9B12A3474C00A82c306e6", role:"Router",
+    source_file:"products/p3-router/KEY-RECORD-MAINNET.md" },
+
+  { id:"f1c-duster", tag:"acquisition", title:"Dust funnel (dust → USDC)",
+    what:"Connect a wallet, see scattered dust balances, one click sweeps them to USDC on Base. Non-custodial, stateless contract.",
+    fee:"zero fee by design (acquisition funnel)",
+    start:"Open the page, connect, sweep.",
+    contract:"0x8c38c2bbECa7575c24ACEf1d907Aa1F4f43CbFB9", role:"DustSweeper",
+    source_file:"products/f1c-duster/KEY-RECORD.md" },
+
+  { id:"g2a-streams", tag:"payments", title:"Payment streams",
+    what:"Create a streaming payment: a vault drips a token to a recipient over time, and the recipient withdraws whatever has vested, permissionlessly.",
+    fee:"500 bps, charged only on withdraw — live value in the check below",
+    start:"Open the page, create a stream or view a live one.",
+    contract:"0x3882A049ee99B96Ea68DF317713ed76008b9A075", role:"StreamFactory",
+    source_file:"products/g2a-streams/KEY-RECORD.md" },
+
+  { id:"g2a-subscriptions", tag:"payments", title:"Subscriptions (recurring toll)",
+    what:"Recurring payments on the SAME factory — no new contract. A payer pre-approves a small allowance; each period a fresh vault is minted for the next window and pulled. A missed period is a HOLE, not a debt.",
+    fee:"500 bps of each period, to the treasury — live bps read from the factory",
+    start:"Open the page, see the live back-to-back periods already fired.",
+    contract:"0x3882A049ee99B96Ea68DF317713ed76008b9A075", role:"StreamFactory (reused)",
+    source_file:"products/g2a-streams/KEY-RECORD.md" },
+
+  { id:"f1a-payment-links", tag:"payments", title:"Payment links",
+    what:"Create a payment request; you get a URL carrying a deposit address that auto-forwards to you. No account, no wallet, no code. The link is minted by the RequestRegistry and pays a forwarder derived from it.",
+    fee:"500 bps on each forwarded payment (the P2 Registry's fee, paid by the forwarder it derives) — live value in the check below",
+    start:"Open the page, create a request, share the link.",
+    contract:"0xeD395024Bba719564bec617b6b42CF6fDC8a252c", role:"RequestRegistry",
+    fee_contract:"0x417c41d406c61E09958032Cd77338fc1F1ac7D45",
+    source_file:"products/f1a-payment-links/DEPLOY-PREP.md" }
+];
+
+const strip0x = (h) => (h || "").replace(/^0x/i, "").toLowerCase();
+const asAddr = (h) => "0x" + strip0x(h).slice(24);
+const asUint = (h) => BigInt(h);
+
+// A rate-limited public RPC answers 200 with NO `result` field (or an empty body) under a burst of
+// concurrent calls. Returning that `undefined` made the caller's `code.length` throw a raw TypeError,
+// so a stranger saw a JS exception instead of a verdict. So: require a real result, retry with
+// backoff, and on final failure throw a CLEAN sentence — a fault is its own state and reads as one (#147).
+async function rpc(method, params){
+  let last;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await _fetchT(CFG.rpc, { method:"POST", headers:{"content-type":"application/json"},
+        body: JSON.stringify({ jsonrpc:"2.0", id:1, method, params }) });
+      if (!res.ok) { last = new Error("http " + res.status); }
+      else {
+        const j = await res.json().catch(() => null);
+        if (!j) { last = new Error("empty body"); }
+        else if (j.error) { last = new Error(j.error.message || "rpc error"); }
+        else if (typeof j.result !== "undefined" && j.result !== null) return j.result;
+        else { last = new Error("rpc returned no result"); }
+      }
+    } catch (e) { last = e; }
+    await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));   // stagger the retry burst
+  }
+  throw new Error("rpc fault — " + (last && last.message ? last.message : "no result"));
+}
+const ethCall = (to, data) => rpc("eth_call", [{ to, data }, "latest"]);
+// per-page live rows use the same guarded path (kept as a named alias so verify.mjs can see it)
+const rpcCall = rpc;
+
+const $ = (id) => document.getElementById(id);
+
+// ── the OTHER pages: a compact list, rendered from PRODUCTS. Not the pitch — the shelf. ──────
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+function renderOthers(){
+  const box = $("others"); if (!box) return;
+  box.innerHTML = PRODUCTS.map((p) => `
+    <a href="./${esc(p.id)}/index.html">
+      <div class="ot">${esc(p.title)}</div>
+      <div class="ow">${esc(p.what)}</div>
+      <div class="of">fee: <b>${esc(p.fee)}</b> · <span class="mono">${esc(p.contract.slice(0,10))}…${esc(p.contract.slice(-6))}</span></div>
+    </a>`).join("");
+}
+renderOthers();
+
+// ── DOOR 3 surfaces: the things you BUILD WITH. Kept OUT of PRODUCTS[] on purpose — that array is
+// the SHELF (each entry has a bundled page at ./<id>/ and is live-checked by verify.mjs). These five
+// are now deployed on Base but ship no page of their own, so they render inline here with their live
+// address + the honest "deployed live" badge. sdk/mcp-server stay source-only. Tag "build"/"infra".
+const SURFACES = [
+  { id:"sdk", tag:"build", title:"TypeScript SDK (@fleet/sdk)",
+    what:"A tree-shakeable viem client: pure {to,data,value} calldata builders for every rail (quote, pay, createLink, createEscrow, release, setMandate, executeLap, swap, sweep, verify402) plus an EIP-712 signing seam. No state at import; addresses are data you pass in.",
+    verb:"npm i @fleet/sdk", source_file:"products/sdk/README.md" },
+  { id:"mcp-server", tag:"build", title:"MCP server (agent tools)",
+    what:"One line of config gives an agent live, non-custodial rails on Base: one tool per product returns the calldata for the ONE money call and simulates it (dry-run by default) before anything is signed. No API key, no account.",
+    verb:"read_fee · pay · escrow_create …", source_file:"products/mcp-server/README.md" },
+  { id:"x402", tag:"build", title:"x402 facilitator (on-chain 402 gate)",
+    what:"The on-chain half of an HTTP-402 flow: a server returns 402, the client pays a rail, a gated writer records the settlement, the server VERIFIES it with a view call then serves the resource. Holds no funds.",
+    verb:"verify(paymentId, to, token, minAmount)", source_file:"products/x402/README.md",
+    href:"./x402/index.html", stub:true, badge:"deployed live", badgecls:"ok",
+    addr:"0x5849eF6f21fDC21d5194c24ED6c824965A613739",
+    addrsrc:"products/x402/DEPLOY-EVIDENCE.md" },
+  { id:"settlement", tag:"build", title:"Settlement registry (read-side paid())",
+    what:"A read-side mirror of a rail's settlement: a gated writer records paymentId -> (amount, at); anyone reads paid()/isPaid(). markPaid is idempotent, so an id can never silently change meaning.",
+    verb:"paid(paymentId) · isPaid(paymentId)", source_file:"products/settlement/src/SettlementRegistry.sol",
+    href:"./settlement/index.html", stub:true, badge:"deployed live", badgecls:"ok",
+    addr:"0xdDA0728Ff635B555D2Af471E2821055bE08F9127",
+    addrsrc:"products/settlement/DEPLOY-EVIDENCE.md" },
+  { id:"fleet-executor", tag:"infra", title:"Fleet executor (EIP-7702 batch delegate)",
+    what:"One installed EIP-7702 delegate drives every fleet surface from a single off-chain EIP-712 signature over a whole signed batch of (target,value,data) — the user's own code runs in the user's frame, and any relayer can carry it.",
+    verb:"execute(calls, nonce, deadline, sig)", source_file:"products/fleet-executor/README.md",
+    href:"./fleet-executor/index.html", badge:"deployed live", badgecls:"ok",
+    addr:"0x410396662089a26C801c54818CCd59640eFCaf77",
+    addrsrc:"products/fleet-executor/DEPLOY-EVIDENCE.md" },
+  { id:"fleet-paymaster", tag:"infra", title:"Fleet paymaster (ERC-4337 sponsorship)",
+    what:"An ERC-4337 v0.7 verifying paymaster that sponsors UserOps calling a fleet contract and charges the sponsorship back as a small additive surcharge on the rail fee (sponsorBps default 10) — not in ETH. Allow-list + per-sender rate limit.",
+    verb:"previewSponsorFee(base) · deposit()", source_file:"products/fleet-paymaster/README.md",
+    href:"./fleet-paymaster/index.html", stub:true, badge:"deployed live", badgecls:"ok",
+    addr:"0x70A615dDc4cd013Cf4D569Ae3394bF4465229B95",
+    addrsrc:"products/fleet-paymaster/DEPLOY-EVIDENCE.md" },
+  { id:"g4c-toll-registry", tag:"infra", title:"Toll registry (per-product toll lookup)",
+    what:"A constructor-set, per-chain lookup: product -> (recipient, feeBps, live) in ONE call, so a new product's toll is registered rather than re-derived. A consumer pins the registry's codehash; live=false reverts rather than defaulting.",
+    verb:"toll(product) · isLive(product)", source_file:"products/g4c-toll-registry/README.md",
+    href:"./g4c-toll-registry/index.html", stub:true, badge:"deployed live", badgecls:"ok",
+    addr:"0xc8319D6fbc0A8f1685Df9c567557141A289b7A1b",
+    addrsrc:"products/g4c-toll-registry/DEPLOY-EVIDENCE.md" },
+];
+function renderSurfaces(){
+  const box = $("surfaces"); if (!box) return;
+  box.innerHTML = SURFACES.map((s) => {
+    const badge = s.badge
+      ? `<span class="ob ${s.badgecls === "ok" ? "obok" : ""}">${esc(s.badge)}</span>`
+      : `<span class="ob">source only, not deployed</span>`;
+    const inner = `
+      <div class="ot">${esc(s.title)}${badge}</div>
+      <div class="ow">${esc(s.what)}</div>
+      <div class="of">call: <span class="mono">${esc(s.verb)}</span> · <span class="mono">${esc(s.source_file)}</span></div>
+      ${s.addr ? `<div class="ov"><span class="mono">${esc(s.addr)}</span> · <span class="mut">verified by hashing the runtime, not the string</span></div>` : ""}`;
+    return s.href ? `<a href="${esc(s.href)}">${inner}</a>` : `<div>${inner}</div>`;
+  }).join("");
+}
+renderSurfaces();
+
+function setState(ok, msg){
+  const d = $("hdot"), s = $("hstate");
+  if (d) d.className = "dot" + (ok === true ? " ok" : ok === false ? " bad" : "");
+  if (s) s.innerHTML = msg;
+}
+
+async function live(){
+  try {
+    const [cid, code, bps, owner, recip, maxBps] = await Promise.all([
+      rpc("eth_chainId", []), rpc("eth_getCode", [CFG.factory, "latest"]),
+      ethCall(CFG.factory, SEL.feeBps), ethCall(CFG.factory, SEL.owner),
+      ethCall(CFG.factory, SEL.feeRecipient), ethCall(CFG.factory, SEL.maxFeeBps),
+    ]);
+    if (Number(BigInt(cid)) !== CFG.chainId) throw new Error("wrong chain " + cid);
+    const codeLen = strip0x(code).length / 2;
+    if (codeLen === 0) throw new Error("no code at factory");
+    const b = Number(asUint(bps) % (1n << 16n));
+    const mb = Number(asUint(maxBps) % (1n << 16n));
+    const sameOwner = asAddr(owner).toLowerCase() === asAddr(recip).toLowerCase();
+
+    // The claim shown is read, not written: the bps NUMBER and the cap both come from chain.
+    if ($("feeBps")) $("feeBps").textContent = String(b);
+    if ($("maxBps")) $("maxBps").textContent = String(mb);
+    if ($("maxBps2")) $("maxBps2").textContent = String(mb);
+    if ($("feeState")) {
+      // if the fee destination has MOVED off the recorded treasury, say so — the record is a
+      // snapshot, the chain is the truth, and a silent mismatch is exactly the drift worth showing.
+      const moved = asAddr(recip).toLowerCase() !== CFG.treasury.toLowerCase();
+      $("feeState").innerHTML =
+        `live, owner-settable · <span class="mono">feeBps()</span> on ${codeLen.toLocaleString()} B of code` +
+        (moved ? ` · <span class="state-bad">fee destination moved off the record</span>` : "");
+    }
+    if ($("ownerCell")) $("ownerCell").innerHTML =
+      `An owner, by a <span class="mono">storage write</span>
+       <span class="sub">owner <span class="mono">${asAddr(owner).slice(0,8)}…${asAddr(owner).slice(-4)}</span>${sameOwner ? " = the fee receiver" : ""}</span>`;
+    if ($("treasury")) {
+      // keep the EIP-55 form when the live value matches the record (it is the same address);
+      // only drop to the raw live bytes if the fee destination has actually MOVED.
+      const live = asAddr(recip);
+      $("treasury").textContent = (live.toLowerCase() === CFG.treasury.toLowerCase())
+        ? CFG.treasury : live;
+    }
+    setState(true, `factory live on Base · fee ${b} bps · cap ${mb} bps`);
+  } catch (e) {
+    // HONESTY TEETH — a dead RPC must NOT keep the last-read number and pretend it is live.
+    const why = String(e && e.message ? e.message : e);
+    if ($("feeBps")) $("feeBps").textContent = "—";
+    if ($("feeState")) $("feeState").innerHTML = "UNREACHABLE — value not shown, not guessed";
+    if ($("maxBps")) $("maxBps").textContent = "—";
+    if ($("maxBps2")) $("maxBps2").textContent = "—";
+    setState(false, `UNREACHABLE (<span class="mono">${why.replace(/[<>]/g, "")}</span>) — nothing below is a live number`);
+  }
+}
+live();
+
+globalThis.__land = { CFG, SEL, live };
+</script>
+<!-- dx-timelock:start -->
+<div class="dx-timelock" id="dxTimelock" style="display:none;max-width:720px;margin:14px auto 0;padding:9px 12px;border:1px solid var(--line,#2a3550);border-radius:8px;font-size:12.5px;color:var(--mut,#8fa0be)"></div>
+<script>
+"use strict";
+(function () {
+  var el = document.getElementById("dxTimelock"); if (!el) return;
+  var ADDR = "0x4B05fA6aD0Ba0D0120Dce19Ce34dde6d1316C237", BAKED = 172800, RPC = "https://base-rpc.publicnode.com";
+  var SEL = "0x7aadef8b";
+  function hum(s) { var d = s / 86400; return (d % 1 === 0) ? (d + " day" + (d > 1 ? "s" : "")) : Math.round(s / 3600) + "h"; }
+  function paint(sec, live) {
+    if (!sec) return;
+    el.innerHTML = "<b>a fee change is STAGED, not instant</b> — the owner's raise or recipient change "
+      + "waits <b>" + hum(sec) + "</b> (the contract's TIMELOCK) before it can be committed"
+      + (live ? " — read live on-chain" : " — TIMELOCK " + hum(BAKED) + " baked, RPC unreachable") + ".";
+    el.style.display = "";
+  }
+  paint(BAKED, false);
+  try {
+    var ac = new AbortController(); var to = setTimeout(function () { ac.abort(); }, 8000);
+    fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, signal: ac.signal,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: ADDR, data: SEL }, "latest"] }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (j && j.result) paint(parseInt(j.result.slice(-16), 16), true); })
+      .catch(function () {})
+      .finally(function () { clearTimeout(to); });
+  } catch (e) {}
+})();
+</script>
+<!-- dx-timelock:end -->
+</body>
+</html>

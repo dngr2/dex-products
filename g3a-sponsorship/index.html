@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<!--
+  G3-a — GAS SPONSORSHIP (EIP-7702 meta-tx relay). ONE static file, NO server, NO build, NO deps.
+  Hand-rolled ABI encode + keccak over raw eth_call/eth_getTransactionByHash, matching the fleet's
+  page convention (see p3-router/frontend for the same idiom).
+
+  THE WHOLE POINT OF THIS PAGE: sponsorship is COUNTER-INTUITIVE. A tx landed, the USER's address is
+  the acting identity (msg.sender inside the call is the user's EOA), and the user paid ZERO gas —
+  a RELAY key paid. That split (actor ≠ payer) is the entire product, and it is invisible from a
+  block explorer unless you know the EIP-7702 shape. So this page reads a REAL fired tx and lays the
+  shape out from ON-CHAIN DATA ONLY: the tx type, the authorization list, the delegated-code pin
+  (0xef0100‖delegate), the receipt log's indexed actor vs payer, and the counter's own lastCaller /
+  lastOrigin. Nothing is typed as a claim; every field is a live read.
+
+  HONESTY RULES:
+   1. NOTHING hardcoded as a fact. The sample tx is read live; its type/from/status/logs are decoded
+      on the page. A reorg or a wrong hash reddens (the tx would not resolve / not be type-4).
+   2. A dead RPC is its OWN state: reads render 'unreachable', NEVER a silent 0 or a false 'ok'
+      (GOTCHAS #27/#112/#147).
+   3. The RELAY float is shown with its low-water/cap envelope, and the fee is what the merchant owes
+      (1.5× the relay's outlay) — the relay is not a faucet.
+   4. Read-only: no wallet, nothing custodied.
+
+  ROUTE: hash-routed so file:// works. CONFIG via ?rpc=<url>.
+-->
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>G3-a — gas sponsorship (EIP-7702): the user acts, the relay pays</title>
+<style>
+  /* palette UNIFIED with the landing (dex-site/index.html) so the whole site reads as one system */
+  :root { --bg:#05080f; --fg:#e9eefb; --mut:#8fa0be; --card:#0b1222; --line:#18233a;
+          --acc:#4d94ff; --ok:#34d399; --warn:#fbbf24; --bad:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .wrap { max-width:820px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:18px; margin:0 0 4px; letter-spacing:.5px; }
+  .sub { color:var(--mut); font-size:13px; margin-bottom:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin:14px 0; }
+  label { display:block; color:var(--mut); font-size:12px; text-transform:uppercase;
+          letter-spacing:.6px; margin:14px 0 6px; }
+  input, select { width:100%; background:#0e1116; color:var(--fg); border:1px solid var(--line);
+                  border-radius:8px; padding:10px 12px; font:inherit; }
+  input:focus, select:focus { outline:none; border-color:var(--acc); }
+  button { background:var(--acc); color:#06131f; border:0; border-radius:8px; padding:11px 16px;
+           font:inherit; font-weight:700; cursor:pointer; margin-top:16px; }
+  button:disabled { opacity:.5; cursor:default; }
+  .big { font-size:30px; font-weight:700; margin:6px 0; }
+  .addr { overflow-wrap:anywhere; background:#0e1116; border:1px solid var(--line);
+          border-radius:8px; padding:12px; margin-top:6px; font-size:13px; }
+  .badge { display:inline-block; font-size:11px; padding:3px 8px; border-radius:999px;
+           border:1px solid var(--line); color:var(--mut); }
+  .badge.ok { color:var(--ok); border-color:var(--ok); }
+  .badge.warn { color:var(--warn); border-color:var(--warn); }
+  .badge.bad { color:var(--bad); border-color:var(--bad); }
+  a { color:var(--acc); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .mut { color:var(--mut); font-size:13px; }
+  details.how > summary { cursor:pointer; color:var(--fg); }
+  details.how > summary::marker { color:var(--acc); }
+  .howbody p { margin:12px 0 0; font-size:13px; color:var(--mut); line-height:1.6; }
+  .howbody b { color:var(--fg); }
+  .howbody i { color:var(--fg); font-style:normal; }
+  .err { color:var(--warn); }
+  .pos { color:var(--ok); }
+  .neg { color:var(--bad); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th { text-align:left; color:var(--mut); font-weight:400; font-size:11px; text-transform:uppercase;
+       letter-spacing:.5px; padding:6px; border-bottom:1px solid var(--line); }
+  td { text-align:left; padding:7px 6px; border-bottom:1px solid #191d24; overflow-wrap:anywhere; }
+  td.k { color:var(--mut); width:38%; }
+  pre { background:#0e1116; border:1px solid var(--line); border-radius:8px; padding:12px;
+        overflow-x:auto; font-size:12px; }
+  .nav { margin-bottom:20px; font-size:13px; display:flex; justify-content:space-between; }
+  .kv { display:grid; grid-template-columns:170px minmax(0,1fr); gap:4px 12px; font-size:13px; }
+  .kv .k { color:var(--mut); }
+  /* the TRACK shrinking is not enough: a grid item keeps min-width:auto and so refuses to compress
+     below its longest token (a 66-char tx), which pushed this page 182px past a 390px phone viewport
+     even with minmax(0,1fr) on the track. Pin the item and let the text break. */
+  .kv>div { min-width:0; overflow-wrap:anywhere; }
+  .split { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px; }
+  .split .box { border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .split .box.actor { border-color:var(--ok); }
+  .split .box.payer { border-color:var(--acc); }
+  .split h4 { margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--mut); }
+</style>
+<link rel="stylesheet" href="../_assets/theme.css">
+<link rel="icon" type="image/svg+xml" href="../_assets/favicon.svg">
+</head>
+<body>
+<!-- dx-chrome --><style>
+/* dx-chrome — shared, namespaced. Injected by chrome.py; do not hand-edit in built files. */
+.dx-top{position:relative;z-index:50;background:rgba(5,8,15,.72);backdrop-filter:blur(8px);border-bottom:1px solid #18233a}
+.dx-top-in{max-width:900px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px}
+.dx-home{display:inline-flex;align-items:center;gap:7px;font:600 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color:#e9eefb;text-decoration:none;padding:6px 2px}
+.dx-home:hover{color:#4d94ff}
+.dx-home .dx-arrow{color:#4d94ff}
+.dx-tag{font:500 12.5px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be;margin-left:auto}
+.dx-foot{position:relative;z-index:50;margin-top:56px;border-top:1px solid #18233a;background:rgba(5,8,15,.72)}
+.dx-foot-in{max-width:900px;margin:0 auto;padding:24px 20px 40px}
+.dx-foot-brand{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+.dx-foot-brand a{font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;text-decoration:none}
+.dx-foot-brand a:hover{color:#4d94ff}
+.dx-foot-brand span{font:500 12.5px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be}
+.dx-foot-nav{display:flex;gap:9px;flex-wrap:wrap}
+.dx-foot-nav a{font:600 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;
+  text-decoration:none;background:rgba(255,255,255,.04);border:1px solid #18233a;border-radius:999px;padding:7px 13px}
+.dx-foot-nav a:hover{border-color:#4d94ff;color:#4d94ff}
+@media(max-width:600px){.dx-tag{display:none}}
+</style>
+<div class="dx-top">
+  <div class="dx-top-in">
+    <a class="dx-home" href="../index.html"><span class="dx-arrow">←</span> DEX fleet</a>
+    <span class="dx-tag">non-custodial rails on Base</span>
+  </div>
+</div>
+<div class="wrap">
+  <div class="nav">
+    <span><b>G3-a</b> <span class="mut">→ gas sponsorship · EIP-7702</span></span>
+    <span class="mut">base #{<span id="chainbadge">…</span>}</span>
+  </div>
+  <div id="app">loading…</div>
+  <p class="mut" style="margin-top:40px">
+    static page · reads Base directly · no server, no account, no cookies ·
+    <span>the user acts, the relay pays, the user's balance is untouched</span>
+  </p>
+</div>
+
+<script src="../_assets/lib.js"></script>
+<script>
+"use strict";
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+
+
+// =============================== config =========================================================
+// Addresses COPIED from files, never retyped (GOTCHAS #73): relay from RELAY-KEY.md, authority from
+// DEMO-AUTHORITY-KEY.md, delegate+counter from the mainnet-addresses record. verify.mjs re-reads
+// g3a_mainnet_addrs.txt and asserts this page matches byte-for-byte.
+const PARAMS = new URLSearchParams(location.search);
+
+// ENDPOINT-POLICY: publicnode primary (call+logs capable), drpc then base.org (25 req/s soft-limit) as alts.
+const CHAIN   = { name: "base", id: 8453, rpc: "https://base-rpc.publicnode.com",
+                  alts: ["https://base.drpc.org", "https://mainnet.base.org"] };
+const RELAY   = "0xB8008336798eBC8550130C12DbbFfDbBBe22edb7";   // the DEDICATED relay (payer, type-4 sender)
+const AUTH    = "0xA3c1eEEB5cd33218d1e81B3278f2BD990FCA77C0";   // the delegated user EOA (actor)
+const DELEGATE= "0xb8381fF6b76726e989a7FFF358dBc3640d78d684";   // SponsorTarget — the 7702 delegate code
+const COUNTER = "0xA8a1f4c0991cB9b85EEa63C10F614BdCc629E2Db";   // the demo target (bump())
+
+// A REAL fired sponsored tx (read live; never trusted — see the shape section).
+const SAMPLE_TX = "0x3ba4e7b0ca6fcbf1fd63bdb901dfb72b4d987dcddf453ac7d6fc593a75b924e1";
+
+// envelope (RULING-float-envelope.md): pin the relay float honestly.
+const LOW_WATER_WEI = 10n ** 13n;      // 0.00001 ETH
+const FLOAT_CAP_WEI = 10n ** 14n;      // 0.0001 ETH
+const FEE_FLOOR_MULT = 1.5;            // fee = 1.5x relay outlay
+
+const SEL = {
+  n: "0x", lastCaller: "0x", lastOrigin: "0x", sponsoredCall: "0x", bump: "0x",
+};
+const SPONSORED_EVENT = "Sponsored(address,address,address,uint256)";
+const DELEGATION_PREFIX = "0xef0100";   // EIP-7702 delegated-code prefix (GOTCHAS #99): code is
+                                        // EXACTLY 0xef0100 ‖ 20-byte delegate = 23 bytes.
+
+// =============================== codec ==========================================================
+const word = (h) => String(h).padStart(64, "0");
+const pad32 = (v) => word(BigInt(v).toString(16));
+const addr32 = (a) => word(a.toLowerCase().replace(/^0x/, ""));
+const isAddr = (a) => /^0x[0-9a-fA-F]{40}$/.test(a || "");
+const short = (a) => (a ? a.slice(0, 6) + "…" + a.slice(-4) : "");
+const hexToBig = (h) => BigInt(h && h !== "0x" ? h : "0x0");
+const last40 = (h) => "0x" + String(h).slice(-40);
+const fmt = (n, d, dp = 6) => {
+  const s = (Number(n) / 10 ** d).toFixed(Math.min(d, dp)).replace(/0+$/, "").replace(/\.$/, "");
+  return s === "" ? "0" : s;
+};
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---- keccak256 (Ethereum) in pure JS — Keccak (pad 0x01..0x80), NOT SHA3 ------------------------
+
+const utf8Hex = (s) => bytesToHex(new TextEncoder().encode(s));
+const sig = (s) => keccak256(utf8Hex(s)).slice(0, 10);
+const eventTopic = (s) => keccak256(utf8Hex(s));   // full 32-byte topic0 for an event signature
+
+SEL.n = sig("n()");                       SEL.lastCaller = sig("lastCaller()");
+SEL.lastOrigin = sig("lastOrigin()");     SEL.sponsoredCall = sig("sponsoredCall(address,bytes)");
+SEL.bump = sig("bump()");
+const SPONSORED_TOPIC = eventTopic(SPONSORED_EVENT);
+
+// the demo inner call: sponsoredCall(counter, bump())
+function encodeSponsoredCall(target) {
+  const inner = SEL.bump;
+  return SEL.sponsoredCall + addr32(target) + pad32(64n) + pad32(BigInt((inner.length - 2) / 2)) +
+         inner.replace(/^0x/, "").padEnd(64, "0");
+}
+// fee the MERCHANT owes = 1.5x the relay's outlay (gasUsed * effectiveGasPrice)
+function feeFromOutlay(outlay) { return (BigInt(outlay) * 3n) / 2n; }
+
+// =============================== rpc ============================================================
+const app = document.getElementById("app");
+const $ = (h) => { app.innerHTML = h; };
+
+async function rpcOn(url, method, params, tries = 3) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await _fetchT(url, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error.message || "rpc error");
+      if (j.result === undefined) throw new Error(j.message || `rpc ${r.status} (no result)`);
+      return j.result;
+    } catch (e) { last = e; if (i < tries - 1) await new Promise((s) => setTimeout(s, 400 * (i + 1))); }
+  }
+  throw last;
+}
+const chainIdOf = async (url) => Number(BigInt(await rpcOn(url, "eth_chainId", [])));
+
+// ONE read → ONE of: 'ok' (a value), 'notfound' (null result — a real absence, e.g. missing tx),
+// or 'unreachable' (transport fault — NEVER silently folded into a value; GOTCHAS #27/#112/#147).
+async function readCall(url, method, params) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await rpcOn(url, method, params);
+      return { status: r === null || r === undefined ? "notfound" : "ok", value: r };
+    } catch (e) {
+      const m = String((e && e.message) || e);
+      if (/revert/i.test(m)) return { status: "reverted", value: null };
+      if (attempt === 0) { await new Promise((r) => setTimeout(r, 250)); continue; }
+      return { status: "unreachable", value: null, err: m };
+    }
+  }
+}
+const ethCall = (url, to, data) => readCall(url, "eth_call", [{ to, data }, "latest"]);
+
+// pick a working endpoint (primary, then alts) for the ONE chain, so a rate-limited primary does not
+// cost an honest read.
+async function pickUrl(cfg) {
+  for (const cand of [cfg.rpc, ...(cfg.alts || [])]) {
+    try { if (await chainIdOf(cand) === cfg.id) return cand; } catch { /* next */ }
+  }
+  return null;
+}
+
+// =============================== view ===========================================================
+async function viewHome() {
+  $("<div class='card'>reading base…</div>");
+
+  const url = await pickUrl(CHAIN);
+  const chainBadge = document.getElementById("chainbadge");
+  if (chainBadge) chainBadge.textContent = url ? String(CHAIN.id) : "unreachable";
+  if (!url) {
+    app.innerHTML = `
+      <h1>G3-a — gas sponsorship</h1>
+      <div class="sub">a 7702 relay: the user acts, the relay pays, the user's balance is untouched.</div>
+      <div class="card"><span class="badge bad">unreachable</span>
+        <p class="mut">no Base endpoint answered <code>eth_chainId</code>. Nothing below is rendered as a
+        value — an unreadable chain is its own state, not a zero (GOTCHAS #27/#112/#147).</p>
+        <div class="addr">${esc(CHAIN.rpc)}</div></div>`;
+    return;
+  }
+
+  // ---- the real tx, read live ----
+  const txr = await readCall(url, "eth_getTransactionByHash", [SAMPLE_TX]);
+  const rcp = await readCall(url, "eth_getTransactionReceipt", [SAMPLE_TX]);
+  // ---- relay live state ----
+  const balR = await readCall(url, "eth_getBalance", [RELAY, "latest"]);
+  const nonR = await readCall(url, "eth_getTransactionCount", [RELAY, "latest"]);
+  const code = await readCall(url, "eth_getCode", [AUTH, "latest"]);
+  // ---- the counter's own recorded identities + the authority's balance (must be 0) ----
+  const nR = await ethCall(url, COUNTER, SEL.n);
+  const lcR = await ethCall(url, COUNTER, SEL.lastCaller);
+  const loR = await ethCall(url, COUNTER, SEL.lastOrigin);
+  const balA = await readCall(url, "eth_getBalance", [AUTH, "latest"]);
+
+  // decode the tx defensively
+  const tx = txr.status === "ok" && txr.value ? txr.value : null;
+  const rcpt = rcp.status === "ok" && rcp.value ? rcp.value : null;
+  const typeOk = tx && parseInt(tx.type, 16) === 4;
+  const authTuple = tx && Array.isArray(tx.authorizationList) ? tx.authorizationList[0] : null;
+  // the delegated-code pin: code is EXACTLY 0xef0100 ‖ delegate (23 bytes)
+  const codeVal = code.status === "ok" && code.value ? code.value.toLowerCase() : "";
+  const delegatedOk = codeVal.length === 46 && codeVal.startsWith(DELEGATION_PREFIX);
+  const delegateInCode = delegatedOk ? "0x" + codeVal.slice(8) : null;
+
+  // "who paid" panel — derived from the RECEIPT, not prose. The Sponsored log indexes
+  // (authority, caller): topic1 == the actor, topic2 == the payer. Those two must DIFFER.
+  let log = null;
+  if (rcpt && Array.isArray(rcpt.logs)) log = rcpt.logs.find((l) => l.topics && l.topics[0] === SPONSORED_TOPIC) || null;
+  const actorFromLog = log ? last40(log.topics[1]) : null;
+  const payerFromLog = log ? last40(log.topics[2]) : null;
+  const payerIsTxFrom = tx && payerFromLog ? tx.from.toLowerCase() === payerFromLog.toLowerCase() : null;
+  const actorIsAuth = actorFromLog ? actorFromLog.toLowerCase() === AUTH.toLowerCase() : null;
+
+  app.innerHTML = `
+    <h1>G3-a — gas sponsorship</h1>
+    <div class="sub">an EIP-7702 relay on Base: the user's EOA <b>acts</b> (it is <code>msg.sender</code>
+      inside the call) while a separate <b>relay key pays</b> (<code>tx.origin</code>). The user holds no
+      ETH. This page reads a REAL type-0x4 tx and decodes the split from on-chain data.</div>
+
+    <div class="card">
+      <div class="row"><b>the shape, on one screen</b>
+        <span class="badge warn">counter-intuitive by design</span></div>
+      <div class="split">
+        <div class="box actor"><h4>actor — who the code ran AS</h4>
+          <div class="addr" style="margin:0">${esc(AUTH)}</div>
+          <p class="mut" style="margin:8px 0 0">the delegated user EOA. Inside the call,
+          <code>msg.sender</code> is this address and <code>address(this)</code> is it too — the user
+          stays the acting identity.</p></div>
+        <div class="box payer"><h4>payer — who paid gas</h4>
+          <div class="addr" style="margin:0">${esc(RELAY)}</div>
+          <p class="mut" style="margin:8px 0 0">the relay key. It is <code>tx.origin</code> and the tx
+          <code>from</code>. The user's balance does not move.</p></div>
+      </div>
+      <p class="mut" style="margin-top:12px">This is why a vanilla explorer view is confusing: the tx
+      <code>from</code> is the relay, the tx <code>to</code> is the user's EOA, and the user
+      <b>signed a delegation</b> (EIP-7702) rather than the tx itself. Three parties, one tx.</p>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>the real fired tx</b> <span class="mut">— read live, never hardcoded</span></div>
+      <div class="kv" style="margin-top:10px">
+        <div class="k">tx</div><div><span class="addr" style="display:inline;padding:2px 6px">${esc(SAMPLE_TX)}</span></div>
+        <div class="k">type</div><div id="txtype">…</div>
+        <div class="k">status</div><div id="txstatus">…</div>
+        <div class="k">from (payer)</div><div>${esc(tx ? tx.from : "—")}</div>
+        <div class="k">to (actor EOA)</div><div>${esc(tx ? tx.to : "—")}</div>
+        <div class="k">gas used</div><div id="txgas">…</div>
+        <div class="k">authorization tuple</div><div id="txtuple">…</div>
+      </div>
+      <p class="mut" style="margin-top:10px">type <b>0x4</b> IS the claim: an EIP-7702 tx carries an
+      authorization list. If this tx were type 0x2 the whole sponsorship story would be false — so the
+      page reads the type, it does not assert it.</p>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>the delegation is real code</b> <span class="badge" id="codebadge">…</span></div>
+      <p class="mut">A 7702-delegated EOA's <code>eth_getCode</code> is EXACTLY
+      <code>0xef0100 ‖ delegate</code> — 23 bytes (GOTCHAS #99). This is the on-chain proof the user's
+      address runs someone else's code, and it names the delegate:</p>
+      <div class="addr">${esc(codeVal || (code.status === "ok" ? "0x" : "(" + code.status + ")"))}</div>
+      <div class="kv" style="margin-top:8px">
+        <div class="k">delegate (from code)</div><div>${esc(delegateInCode || "—")}</div>
+        <div class="k">expected delegate</div><div>${esc(DELEGATE)}</div>
+        <div class="k">code length</div><div>${codeVal ? (codeVal.length - 2) / 2 + " bytes" : "—"}</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>who paid — from the RECEIPT</b>
+        <span class="badge" id="paybadge">…</span></div>
+      <p class="mut">The contract emits <code>${esc(SPONSORED_EVENT)}</code> with the actor and the payer
+      <b>indexed</b>. So the receipt itself carries the split: <code>topic1</code> is the actor,
+      <code>topic2</code> is the payer — two different addresses, from on-chain data, not from prose.</p>
+      <div class="kv" style="margin-top:8px">
+        <div class="k">log emitted by</div><div>${esc(log ? log.address : "—")}</div>
+        <div class="k">topic1 · actor</div><div>${esc(actorFromLog || "—")}</div>
+        <div class="k">topic2 · payer</div><div>${esc(payerFromLog || "—")}</div>
+        <div class="k">payer == tx.from ?</div><div id="payercheck">…</div>
+        <div class="k">actor == the EOA ?</div><div id="actorcheck">…</div>
+      </div>
+      <div class="card" style="margin-top:12px;background:#0e1116">
+        <div class="row"><b>and the counter agrees</b> <span class="mut">— the target's own state</span></div>
+        <p class="mut" style="margin:8px 0 0">The demo target <code>Counter</code>
+        (<span class="addr" style="display:inline;padding:2px 6px">${esc(COUNTER)}</span>) records both
+        identities on-chain: <code>lastCaller</code> (the actor it saw) and <code>lastOrigin</code> (the
+        payer). They come from <em>different</em> call frames, so they must differ — the actor/payer
+        split, written by the target itself.</p>
+        <div class="kv" style="margin-top:8px">
+          <div class="k">counter.n()</div><div>${nR.status === "ok" ? esc(hexToBig(nR.value).toString()) : "(" + esc(nR.status) + ")"}</div>
+          <div class="k">lastCaller() = actor</div><div>${lcR.status === "ok" ? esc(last40(lcR.value)) : "(" + esc(lcR.status) + ")"}</div>
+          <div class="k">lastOrigin() = payer</div><div>${loR.status === "ok" ? esc(last40(loR.value)) : "(" + esc(loR.status) + ")"}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>the relay's live state</b> <span class="badge" id="floatbadge">…</span></div>
+      <div class="kv" style="margin-top:10px">
+        <div class="k">relay</div><div><span class="addr" style="display:inline;padding:2px 6px">${esc(RELAY)}</span></div>
+        <div class="k">float (balance)</div><div id="relayfloat">…</div>
+        <div class="k">relay nonce</div><div id="relaynonce">…</div>
+        <div class="k">user (AUTH) balance</div><div id="authbal">…</div>
+      </div>
+      <p class="mut" style="margin-top:10px">The float is the relay's spendable ETH, held between a
+      low-water mark and a hard cap (0.00001–0.0001 ETH). Below low-water the daemon stops sponsoring.
+      The user's balance is <b>0</b> — they really paid nothing.</p>
+    </div>
+
+    <details class="card how" open>
+      <summary><b>the fee</b> <span class="mut">— the relay is not a faucet</span></summary>
+      <div class="howbody" id="feebody"></div>
+    </details>
+
+    <details class="card how">
+      <summary><b>how it works, and what it is not</b></summary>
+      <div class="howbody">
+        <p><b>What it does.</b> A user's EOA signs an EIP-7702 authorization naming the
+          <code>SponsorTarget</code> delegate. A relay then submits a type-0x4 tx that carries that
+          authorization and the call. The user's address becomes <code>msg.sender</code> (it runs the
+          delegate's code), the relay is <code>tx.origin</code> and pays the gas.</p>
+        <p><b>Where the fee comes from.</b> The relay charges its merchant 1.5× the gas it laid out
+          (the κ rail), so a relayed tx is net-positive before any volume. The fee is priced live off
+          <code>eth_gasPrice</code> and the measured gas — never a constant.</p>
+        <p><b>What it is NOT.</b> Not account abstraction (that is 4337 — this is a native type-4 tx,
+          no bundler, no entrypoint). Not custody: the user's key still controls the EOA at all times
+          and can un-delegate by signing a tuple with <code>delegate = 0x0</code>. v1 is one relay,
+          Base-only.</p>
+        <p><b>Known caveat — anyone can drive a delegated account (v1).</b> This delegate checks
+          <i>no caller and no signature</i>: <code>sponsoredCall</code> forwards a call from the
+          delegated EOA's own frame, so <b>anyone</b> can make your delegated account call anything
+          (and move <i>its</i> tokens). It is not that the relay is trusted — it is that the delegate
+          authenticates no one. Fix (next deploy): require a self-call or an EIP-712 intent with a
+          nonce. To exit today, sign a new authorization with <code>delegate = 0x0</code>.</p>
+        <p><b>Why page-truth matters here.</b> "The user paid 0" is easy to claim and hard to see. Every
+          number on this page is a live read; a dead RPC renders <b>unreachable</b>, never a
+          plausible zero.</p>
+      </div>
+    </details>`;
+
+  // ---- fill the live/derived cells (so a missing read is visibly 'unreachable', not a stale value) ----
+  const put = (id, html) => { const e = document.getElementById(id); if (e) e.innerHTML = html; };
+  put("txtype", tx ? `<span class="${typeOk ? "pos" : "neg"}">${esc(tx.type)}${typeOk ? " (EIP-7702 ✓)" : " (NOT 7702!)"}</span>` : bad(txr.status));
+  put("txstatus", rcpt ? (rcpt.status === "0x1" ? "<span class='pos'>success</span>" : "<span class='neg'>reverted</span>") : bad(rcp.status));
+  put("txgas", rcpt ? esc(BigInt(rcpt.gasUsed).toString()) : "—");
+  put("txtuple", authTuple ? `authority ${esc(last40("0x" + authTuple.address.slice(-40)))} → delegate ${esc(authTuple.address)}, nonce ${esc(BigInt(authTuple.nonce).toString())}` : "—");
+  put("codebadge", code.status !== "ok" ? `<span class="badge ${code.status === "unreachable" ? "warn" : "bad"}">${esc(code.status)}</span>`
+    : delegatedOk ? `<span class="badge ${delegateInCode && delegateInCode.toLowerCase() === DELEGATE.toLowerCase() ? "ok" : "bad"}">${delegateInCode && delegateInCode.toLowerCase() === DELEGATE.toLowerCase() ? "delegated ✓ names SponsorTarget" : "wrong delegate"}</span>`
+    : `<span class="badge bad">not delegated</span>`);
+  const splitOk = actorFromLog && payerFromLog && actorFromLog.toLowerCase() !== payerFromLog.toLowerCase();
+  put("paybadge", log ? `<span class="badge ${splitOk ? "ok" : "bad"}">${splitOk ? "actor ≠ payer ✓" : "SPLIT MISSING"}</span>` : "<span class='badge warn'>no log</span>");
+  put("payercheck", payerIsTxFrom === null ? "—" : payerIsTxFrom ? "<span class='pos'>yes — the payer is the tx sender</span>" : "<span class='neg'>no</span>");
+  put("actorcheck", actorIsAuth === null ? "—" : actorIsAuth ? "<span class='pos'>yes — the actor is the user's EOA</span>" : "<span class='neg'>no</span>");
+  if (balR.status === "ok") {
+    const b = hexToBig(balR.value);
+    const inEnv = b >= LOW_WATER_WEI && b <= FLOAT_CAP_WEI;
+    put("relayfloat", `${esc(fmt(b, 18))} ETH <span class="mut">(${esc(b.toString())} wei)</span>`);
+    put("floatbadge", `<span class="badge ${inEnv ? "ok" : "warn"}">${inEnv ? "inside envelope" : "outside envelope"}</span>`);
+  } else put("relayfloat", bad(balR.status));
+  put("relaynonce", nonR.status === "ok" ? esc(hexToBig(nonR.value).toString()) : bad(nonR.status));
+  put("authbal", balA.status === "ok" ? `${esc(hexToBig(balA.value).toString())} wei <span class="mut">(the user paid nothing)</span>` : bad(balA.status));
+
+  // ---- the fee, derived from the real receipt's gas ----
+  const fb = document.getElementById("feebody");
+  if (fb) {
+    if (!rcpt) fb.innerHTML = `<p class="mut">receipt unreadable (${esc(rcp.status)}) — no fee to derive.</p>`;
+    else {
+      const outlay = BigInt(rcpt.gasUsed) * BigInt(rcpt.effectiveGasPrice || "0x0");
+      const fee = feeFromOutlay(outlay);
+      fb.innerHTML = `
+        <div class="kv">
+          <div class="k">this tx's relay outlay</div><div>${esc(fmt(outlay, 18))} ETH <span class="mut">(gasUsed × gasPrice)</span></div>
+          <div class="k">fee owed (1.5×)</div><div><b>${esc(fmt(fee, 18))} ETH</b></div>
+          <div class="k">net to the relay</div><div><span class="pos">+${esc(fmt(fee - outlay, 18))} ETH</span></div>
+        </div>
+        <p class="mut" style="margin-top:10px">The merchant pays 1.5× the gas we laid out, priced live —
+        so sponsorship is net-positive, not charity. The floor is a rail: a line under it is FLAGGED in
+        the ledger, never silently dropped.</p>`;
+    }
+  }
+}
+const bad = (st) => `<span class="${st === "unreachable" ? "err" : "neg"}">${esc(st)}</span>`;
+
+// =============================== boot ===========================================================
+window.onhashchange = () => viewHome();
+viewHome();
+
+// expose for the verify + e2e harnesses
+globalThis.CHAIN = CHAIN;
+globalThis.RELAY = RELAY;
+globalThis.AUTH = AUTH;
+globalThis.DELEGATE = DELEGATE;
+globalThis.COUNTER = COUNTER;
+globalThis.SAMPLE_TX = SAMPLE_TX;
+globalThis.SEL = SEL;
+globalThis.SPONSORED_EVENT = SPONSORED_EVENT;
+globalThis.SPONSORED_TOPIC = SPONSORED_TOPIC;
+globalThis.DELEGATION_PREFIX = DELEGATION_PREFIX;
+globalThis.LOW_WATER_WEI = LOW_WATER_WEI;
+globalThis.FLOAT_CAP_WEI = FLOAT_CAP_WEI;
+globalThis.sig = sig;
+globalThis.eventTopic = eventTopic;
+globalThis.keccak256 = keccak256;
+globalThis.utf8Hex = utf8Hex;
+globalThis.encodeSponsoredCall = encodeSponsoredCall;
+globalThis.feeFromOutlay = feeFromOutlay;
+globalThis.readCall = readCall;
+globalThis.ethCall = ethCall;
+globalThis.pickUrl = pickUrl;
+globalThis.viewHome = viewHome;
+</script>
+
+<div class="dx-foot">
+  <div class="dx-foot-in">
+    <div class="dx-foot-brand"><a href="../index.html">← DEX fleet</a>
+      <span>truth-only · every number read on-chain</span></div>
+    <nav class="dx-foot-nav" aria-label="All pages"><a href="../subscribe/index.html">Subscriptions</a><a href="../merchant/index.html">For merchants</a><a href="../g2b-escrow/index.html">Escrow</a><a href="../g2a-streams/index.html">Streams</a><a href="../f1a-payment-links/index.html">Payment links</a><a href="../p2-forwarder/index.html">Forwarder</a><a href="../p3-router/index.html">Swap router</a><a href="../g4b-receipts/index.html">Receipts</a><a href="../g3a-sponsorship/index.html">Gasless</a><a href="../f1c-duster/index.html">Dust → USDC</a><a href="../miniapp/index.html">Pay in-feed</a><a href="../fleet-executor/index.html">Executor</a><a href="../status/index.html">Status</a><a href="../security/index.html">Security</a><a href="../changelog/index.html">Changelog</a></nav>
+  </div>
+</div>
+</body>
+</html>

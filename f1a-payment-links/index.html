@@ -1,0 +1,780 @@
+<!doctype html>
+<html data-theme="light" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pay Link — create a payment request</title>
+<style>
+  :root { --fg:#0f172a; --muted:#64748b; --bg:#f8fafc; --card:#fff; --line:#e2e8f0; --ok:#0f9d58; --warn:#b45309; --btn:#1f6feb; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; color:var(--fg); background:var(--bg); }
+  .wrap { max-width:560px; margin:6vh auto; padding:0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:22px 22px 18px; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+  header { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--ok); box-shadow:0 0 0 4px rgba(15,157,88,.12); }
+  .dot.warn { background:var(--warn); box-shadow:0 0 0 4px rgba(180,83,9,.12); }
+  h1 { font-size:16px; margin:0; font-weight:600; }
+  .sub { color:var(--muted); font-size:13px; margin:0 0 16px; }
+  .tabs { display:flex; gap:6px; margin-bottom:16px; }
+  .tab { flex:1; text-align:center; padding:8px; border:1px solid var(--line); border-radius:8px; font-size:14px; font-weight:600; color:var(--muted); cursor:pointer; background:#fff; }
+  .tab.on { color:var(--btn); border-color:rgba(31,111,235,.4); background:rgba(31,111,235,.06); }
+  .row { display:flex; justify-content:space-between; gap:12px; padding:10px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .row:last-of-type { border-bottom:0; }
+  .row .k { color:var(--muted); flex:0 0 auto; }
+  .row .v { font-variant-numeric:tabular-nums; font-weight:600; text-align:right; overflow-wrap:anywhere; }
+  .amt { font-size:22px; }
+  .badge { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; background:rgba(31,111,235,.1); color:var(--btn); font-weight:600; }
+  label { display:block; font-size:12px; color:var(--muted); margin:12px 0 4px; font-weight:600; text-transform:uppercase; letter-spacing:.03em; }
+  input { width:100%; padding:10px 11px; border:1px solid var(--line); border-radius:8px; font:14px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--fg); background:#fff; }
+  input:focus { outline:2px solid rgba(31,111,235,.25); border-color:rgba(31,111,235,.4); }
+  button { width:100%; margin-top:16px; padding:12px; border:0; border-radius:9px; background:var(--btn); color:#fff; font-size:15px; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.55; cursor:default; }
+  .foot { color:var(--muted); font-size:12px; margin-top:14px; text-align:center; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; overflow-wrap:anywhere; color:var(--muted); }
+  .hide { display:none; }
+  .err { color:var(--warn); font-size:13px; margin-top:10px; }
+</style>
+<link rel="stylesheet" href="../_assets/theme.css">
+<link rel="icon" type="image/svg+xml" href="../_assets/favicon.svg">
+</head>
+<body>
+<!-- dx-chrome --><style>
+/* dx-chrome — shared, namespaced. Injected by chrome.py; do not hand-edit in built files. */
+.dx-top{position:relative;z-index:50;background:rgba(248,250,252,.86);backdrop-filter:blur(8px);border-bottom:1px solid #e2e8f0}
+.dx-top-in{max-width:900px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px}
+.dx-home{display:inline-flex;align-items:center;gap:7px;font:600 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color:#0f172a;text-decoration:none;padding:6px 2px}
+.dx-home:hover{color:#1f6feb}
+.dx-home .dx-arrow{color:#1f6feb}
+.dx-tag{font:500 12.5px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#64748b;margin-left:auto}
+.dx-foot{position:relative;z-index:50;margin-top:56px;border-top:1px solid #e2e8f0;background:rgba(248,250,252,.86)}
+.dx-foot-in{max-width:900px;margin:0 auto;padding:24px 20px 40px}
+.dx-foot-brand{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+.dx-foot-brand a{font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;text-decoration:none}
+.dx-foot-brand a:hover{color:#1f6feb}
+.dx-foot-brand span{font:500 12.5px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#64748b}
+.dx-foot-nav{display:flex;gap:9px;flex-wrap:wrap}
+.dx-foot-nav a{font:600 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;
+  text-decoration:none;background:rgba(255,255,255,.6);border:1px solid #e2e8f0;border-radius:999px;padding:7px 13px}
+.dx-foot-nav a:hover{border-color:#1f6feb;color:#1f6feb}
+@media(max-width:600px){.dx-tag{display:none}}
+</style>
+<div class="dx-top">
+  <div class="dx-top-in">
+    <a class="dx-home" href="../index.html"><span class="dx-arrow">←</span> DEX fleet</a>
+    <span class="dx-tag">non-custodial rails on Base</span>
+  </div>
+</div>
+<div class="wrap">
+  <div class="card">
+    <header><span class="dot" id="dot"></span><h1 id="title">Pay Link</h1><span class="badge" id="badge">live</span></header>
+    <p class="sub" id="sub">Create a payment request — you get a URL carrying a deposit address that auto-forwards to you. No account, no wallet, no code.</p>
+    <p class="sub" style="margin-top:-10px">Just want to get paid right now? <a href="./payme/index.html">open the one-tap QR page →</a> · billing a client? <a href="./invoice/index.html">build a hosted invoice →</a></p>
+
+    <div class="tabs">
+      <div class="tab on" id="tab-create">Create request</div>
+      <div class="tab" id="tab-pay">Open a link</div>
+      <div class="tab" id="tab-loop">Your own link</div>
+    </div>
+
+    <div id="form"></div>
+    <div id="rows"></div>
+
+    <button id="go">Create link</button>
+    <p class="err hide" id="err"></p>
+    <p class="foot" id="status">Creating a link costs no gas and deploys nothing. The deposit address exists counterfactually; the first payment auto-forwards to you (gas borne by our keeper).</p>    <p class="mono hide" id="out"></p>
+    <div id="qrow" class="hide" style="display:flex;gap:18px;align-items:flex-start;justify-content:center;margin-top:16px"></div>
+  </div>
+</div>
+
+<!-- ── inline QR ─────────────────────────────────────────────────────────────────────
+     Byte-mode, ECC-L, versions 1–10, ZERO deps. Matrices bit-exact vs a reference encoder,
+     decode-verified (rendered → PNG → decoded via opencv). Renders to <canvas>. Shared block —
+     byte-identical to p2-forwarder / g2b-escrow / g2a-subscriptions (GOTCHA #131: reuse, not rederive).
+     Usage: qrHTML(text, px) -> canvas markup; call drawQRs(root) after inserting it.
+──────────────────────────────────────────────────────────────────────────────────── -->
+<script src="../_assets/lib.js"></script>
+<script>
+(function (G) {
+  "use strict";
+  // GF(256), primitive 0x11d — Reed–Solomon over the QR field
+  var EXP = new Array(256), LOG = new Array(256);
+  (function () { var x = 1; for (var i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 0x100) x ^= 0x11d; } EXP[255] = EXP[0]; })();
+  function gmul(a, b) { return (a === 0 || b === 0) ? 0 : EXP[(LOG[a] + LOG[b]) % 255]; }
+  function rsGen(n) { var p = [1]; for (var i = 0; i < n; i++) { var r = new Array(p.length + 1).fill(0); for (var j = 0; j < p.length; j++) { r[j] ^= gmul(p[j], 1); r[j + 1] ^= gmul(p[j], EXP[i]); } p = r; } return p; }
+  function rsEcc(data, n) { var gen = rsGen(n), res = data.concat(new Array(n).fill(0)); for (var i = 0; i < data.length; i++) { var c = res[i]; if (c !== 0) for (var j = 1; j < gen.length; j++) res[i + j] ^= gmul(gen[j], c); } return res.slice(data.length); }
+
+  // per-version Reed–Solomon block structure, ECC-L only: [count, totalCw, dataCw]
+  var RS = { 1: [[1, 26, 19]], 2: [[1, 44, 34]], 3: [[1, 70, 55]], 4: [[1, 100, 80]], 5: [[1, 134, 108]],
+    6: [[2, 86, 68]], 7: [[2, 98, 78]], 8: [[2, 121, 97]], 9: [[2, 146, 116]], 10: [[2, 86, 68], [2, 87, 69]] };
+  var ALIGN = { 1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34], 7: [6, 22, 38], 8: [6, 24, 42], 9: [6, 26, 46], 10: [6, 28, 50] };
+  function dataCw(v) { var n = 0; RS[v].forEach(function (b) { n += b[0] * b[2]; }); return n; }
+  function byteCap(v) { return Math.floor((dataCw(v) * 8 - 4 - (v < 10 ? 8 : 16)) / 8); }
+
+  function bchDigit(x) { var d = 0; while (x !== 0) { d++; x >>>= 1; } return d; }
+  function formatBits(ecl, mask) { var data = (ecl << 3) | mask, d = data << 10; while (bchDigit(d) - bchDigit(0x537) >= 0) d ^= 0x537 << (bchDigit(d) - bchDigit(0x537)); return ((data << 10) | d) ^ 0x5412; }
+  function versionBits(v) { var d = v << 12; while (bchDigit(d) - bchDigit(0x1f25) >= 0) d ^= 0x1f25 << (bchDigit(d) - bchDigit(0x1f25)); return (v << 12) | d; }
+
+  function chooseVersion(n) { for (var v = 1; v <= 10; v++) if (n <= byteCap(v)) return v; throw new Error("qr: too long (" + n + " bytes)"); }
+
+  function codewords(text, version) {
+    var bytes = Array.prototype.slice.call(new TextEncoder().encode(text)), bits = [];
+    function put(val, len) { for (var i = len - 1; i >= 0; i--) bits.push((val >>> i) & 1); }
+    put(4, 4); put(bytes.length, version < 10 ? 8 : 16); bytes.forEach(function (c) { put(c, 8); });
+    var total = dataCw(version), cap = total * 8;
+    for (var i = 0; i < 4 && bits.length < cap; i++) bits.push(0);
+    while (bits.length % 8 !== 0) bits.push(0);
+    var data = []; for (var k = 0; k < bits.length; k += 8) { var x = 0; for (var j = 0; j < 8; j++) x = (x << 1) | bits[k + j]; data.push(x); }
+    var pad = [0xEC, 0x11], pi = 0; while (data.length < total) data.push(pad[pi++ % 2]);
+    var blocks = [], off = 0;
+    RS[version].forEach(function (blk) { for (var i = 0; i < blk[0]; i++) { var dd = data.slice(off, off + blk[2]); off += blk[2]; blocks.push({ d: dd, e: rsEcc(dd, blk[1] - blk[2]) }); } });
+    var out = [], maxD = Math.max.apply(null, blocks.map(function (b) { return b.d.length; }));
+    for (var i2 = 0; i2 < maxD; i2++) blocks.forEach(function (b) { if (i2 < b.d.length) out.push(b.d[i2]); });
+    var maxE = Math.max.apply(null, blocks.map(function (b) { return b.e.length; }));
+    for (var i3 = 0; i3 < maxE; i3++) blocks.forEach(function (b) { if (i3 < b.e.length) out.push(b.e[i3]); });
+    return out;
+  }
+
+  function blank(s) { var m = []; for (var i = 0; i < s; i++) m.push(new Array(s).fill(null)); return m; }
+  function finder(m, r, c) { for (var dr = -1; dr <= 7; dr++) for (var dc = -1; dc <= 7; dc++) { var rr = r + dr, cc = c + dc; if (rr < 0 || cc < 0 || rr >= m.length || cc >= m.length) continue; var on = (dr >= 0 && dr <= 6 && (dc === 0 || dc === 6)) || (dc >= 0 && dc <= 6 && (dr === 0 || dr === 6)) || (dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4); m[rr][cc] = on ? 1 : 0; } }
+  function align(m, cx, cy) { for (var dr = -2; dr <= 2; dr++) for (var dc = -2; dc <= 2; dc++) m[cy + dr][cx + dc] = (Math.max(Math.abs(dr), Math.abs(dc)) !== 1) ? 1 : 0; }
+  function reserved(s, version) {
+    var rm = blank(s).map(function (r) { return r.map(function () { return false; }); });
+    function mark(r, c, dim) { for (var dr = 0; dr < dim; dr++) for (var dc = 0; dc < dim; dc++) { var rr = r + dr, cc = c + dc; if (rr >= 0 && cc >= 0 && rr < s && cc < s) rm[rr][cc] = true; } }
+    mark(-1, -1, 9); mark(-1, s - 8, 9); mark(s - 8, -1, 9);
+    for (var i = 0; i < s; i++) { rm[6][i] = true; rm[i][6] = true; }
+    ALIGN[version].forEach(function (cy) { ALIGN[version].forEach(function (cx) { if ((cx === 6 && cy === 6) || (cx === 6 && cy === s - 7) || (cx === s - 7 && cy === 6)) return; mark(cy - 2, cx - 2, 5); }); });
+    for (var a = 0; a < 9; a++) { rm[8][a] = true; rm[a][8] = true; }
+    for (var b = 0; b < 8; b++) { rm[8][s - 1 - b] = true; rm[s - 1 - b][8] = true; }
+    rm[s - 8][8] = true;
+    if (version >= 7) for (var p = 0; p < 6; p++) for (var q = 0; q < 3; q++) { rm[s - 11 + q][p] = true; rm[p][s - 11 + q] = true; }
+    return rm;
+  }
+  function functions(m, version) {
+    var s = m.length;
+    finder(m, 0, 0); finder(m, 0, s - 7); finder(m, s - 7, 0);
+    for (var i = 8; i < s - 8; i++) { if (m[6][i] === null) m[6][i] = i % 2 === 0 ? 1 : 0; if (m[i][6] === null) m[i][6] = i % 2 === 0 ? 1 : 0; }
+    ALIGN[version].forEach(function (cy) { ALIGN[version].forEach(function (cx) { if ((cx === 6 && cy === 6) || (cx === 6 && cy === s - 7) || (cx === s - 7 && cy === 6)) return; align(m, cx, cy); }); });
+    for (var a = 0; a < 9; a++) { if (m[8][a] === null) m[8][a] = 0; if (m[a][8] === null) m[a][8] = 0; }
+    for (var b = 0; b < 8; b++) { if (m[8][s - 1 - b] === null) m[8][s - 1 - b] = 0; if (m[s - 1 - b][8] === null) m[s - 1 - b][8] = 0; }
+    m[s - 8][8] = 1;
+    if (version >= 7) { var vb = versionBits(version); for (var k = 0; k < 18; k++) { var bit = (vb >>> k) & 1, aa = Math.floor(k / 3), bb = k % 3; m[s - 11 + bb][aa] = bit; m[aa][s - 11 + bb] = bit; } }
+  }
+  function placeData(m, cw) {
+    var s = m.length, dir = -1, row = s - 1, col = s - 1, idx = 0, total = cw.length * 8;
+    function bitAt(i) { return i < total ? (cw[i >> 3] >>> (7 - (i & 7))) & 1 : 0; }
+    for (; col > 0; col -= 2) {
+      if (col === 6) col--;
+      for (;;) {
+        for (var c = 0; c < 2; c++) { var cc = col - c; if (m[row][cc] === null) m[row][cc] = bitAt(idx++); }
+        row += dir; if (row < 0 || row >= s) { row -= dir; dir = -dir; break; }
+      }
+    }
+  }
+  function maskFn(mask, r, c) {
+    switch (mask) {
+      case 0: return (r + c) % 2 === 0; case 1: return r % 2 === 0; case 2: return c % 3 === 0;
+      case 3: return (r + c) % 3 === 0; case 4: return (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0;
+      case 5: return ((r * c) % 2 + (r * c) % 3) === 0; case 6: return (((r * c) % 2 + (r * c) % 3) % 2) === 0;
+      case 7: return (((r + c) % 2 + (r * c) % 3) % 2) === 0;
+    }
+  }
+  function applyMask(m, mask, version) { var s = m.length, rm = reserved(s, version); for (var r = 0; r < s; r++) for (var c = 0; c < s; c++) if (!rm[r][c] && maskFn(mask, r, c)) m[r][c] ^= 1; }
+  function putFormat(m, ecl, mask) {
+    var s = m.length, bits = formatBits(ecl, mask); function bit(i) { return (bits >>> i) & 1; }
+    for (var i = 0; i <= 5; i++) m[i][8] = bit(i);
+    m[7][8] = bit(6); m[8][8] = bit(7); m[8][7] = bit(8);
+    for (var k = 9; k < 15; k++) m[8][14 - k] = bit(k);
+    for (var a = 0; a < 8; a++) m[8][s - 1 - a] = bit(a);
+    for (var b = 8; b < 15; b++) m[s - 15 + b][8] = bit(b);
+    m[s - 8][8] = 1;
+  }
+  // ISO/IEC 18004 mask penalty; lowest score wins (matches the reference encoder exactly)
+  function penalty(m) {
+    var s = m.length, p = 0, cont = new Array(s + 1).fill(0);
+    for (var r = 0; r < s; r++) { var prev = m[r][0], len = 0; for (var c = 0; c < s; c++) { if (m[r][c] === prev) len++; else { if (len >= 5) cont[len]++; len = 1; prev = m[r][c]; } } if (len >= 5) cont[len]++; }
+    for (var c2 = 0; c2 < s; c2++) { var pv = m[0][c2], ln = 0; for (var r2 = 0; r2 < s; r2++) { if (m[r2][c2] === pv) ln++; else { if (ln >= 5) cont[ln]++; ln = 1; pv = m[r2][c2]; } } if (ln >= 5) cont[ln]++; }
+    for (var l = 5; l <= s; l++) p += cont[l] * (l - 2);
+    for (var r3 = 0; r3 < s - 1; r3++) { var c3 = 0; while (c3 < s - 1) { var tr = m[r3][c3 + 1]; if (tr !== m[r3 + 1][c3 + 1]) { c3 += 2; continue; } if (tr !== m[r3][c3]) { c3 += 1; continue; } if (tr !== m[r3 + 1][c3]) { c3 += 1; continue; } p += 3; c3 += 1; } }
+    function L3(get) { var cnt = 0; for (var i = 0; i < s - 10; i++) { var o1 = !get(i + 1) && get(i + 4) && !get(i + 5) && get(i + 6) && !get(i + 9) && get(i) && get(i + 2) && get(i + 3) && !get(i + 7) && !get(i + 8) && !get(i + 10); var o2 = !get(i + 1) && get(i + 4) && !get(i + 5) && get(i + 6) && !get(i + 9) && !get(i) && !get(i + 2) && !get(i + 3) && get(i + 7) && get(i + 8) && get(i + 10); if (o1 || o2) { cnt++; if (get(i + 10)) i++; } } return cnt; }
+    for (var r4 = 0; r4 < s; r4++) p += 40 * L3(function (i) { return m[r4][i]; });
+    for (var c4 = 0; c4 < s; c4++) p += 40 * L3(function (i) { return m[i][c4]; });
+    var dark = 0; for (var r5 = 0; r5 < s; r5++) for (var c5 = 0; c5 < s; c5++) dark += m[r5][c5];
+    p += Math.floor(Math.abs(dark * 100 / (s * s) - 50) / 5) * 10;
+    return p;
+  }
+  function scoreMatrix(s, v, cw, mask) {
+    var m = blank(s); functions(m, v); placeData(m, cw); applyMask(m, mask, v); putFormat(m, 1, mask);
+    // reference scores in "test" mode: format/version/dark modules are zero while scoring
+    for (var i = 0; i <= 5; i++) m[i][8] = 0; m[7][8] = 0; m[8][8] = 0; m[8][7] = 0;
+    for (var k = 9; k < 15; k++) m[8][14 - k] = 0;
+    for (var a = 0; a < 8; a++) m[8][s - 1 - a] = 0;
+    for (var b = 8; b < 15; b++) m[s - 15 + b][8] = 0;
+    m[s - 8][8] = 0;
+    if (v >= 7) for (var p = 0; p < 6; p++) for (var q = 0; q < 3; q++) { m[s - 11 + q][p] = 0; m[p][s - 11 + q] = 0; }
+    return m;
+  }
+  function encode(text) {
+    var v = chooseVersion(Array.prototype.slice.call(new TextEncoder().encode(text)).length);
+    var cw = codewords(text, v), s = 4 * v + 17, best = 0, bestPen = Infinity;
+    for (var mk = 0; mk < 8; mk++) { var pen = penalty(scoreMatrix(s, v, cw, mk)); if (pen < bestPen) { bestPen = pen; best = mk; } }
+    var m = blank(s); functions(m, v); placeData(m, cw); applyMask(m, best, v); putFormat(m, 1, best);
+    return { size: s, version: v, matrix: m };
+  }
+
+  function escA(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
+  G.qrHTML = function (text, px) {
+    px = px || 200;
+    return '<canvas class="qr" data-qr="' + escA(text) + '" data-px="' + px +
+      '" style="width:' + px + 'px;height:' + px + 'px;background:#fff;border-radius:8px"></canvas>';
+  };
+  G.drawQRs = function (root) {
+    var nodes = (root || document).querySelectorAll("canvas[data-qr]:not([data-done])");
+    Array.prototype.forEach.call(nodes, function (cv) {
+      var text = cv.getAttribute("data-qr"), px = parseInt(cv.getAttribute("data-px") || "200", 10);
+      try {
+        var r = encode(text), s = r.size, quiet = 4, total = s + quiet * 2;
+        // size the BACKING STORE in whole device pixels so each module is an exact integer
+        // number of them — a 4px/module code scans; a fractional 3.4px one can fail at 1x.
+        var dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 4);
+        var scale = Math.max(2, Math.floor((px * dpr) / total));
+        var size = scale * total;
+        cv.width = size; cv.height = size;
+        var g = cv.getContext("2d");
+        g.fillStyle = "#fff"; g.fillRect(0, 0, size, size);
+        g.fillStyle = "#000";
+        for (var y = 0; y < s; y++) for (var x = 0; x < s; x++) if (r.matrix[y][x]) g.fillRect((x + quiet) * scale, (y + quiet) * scale, scale, scale);
+        cv.setAttribute("data-done", "1");
+      } catch (e) { cv.setAttribute("title", "qr: " + e.message); }
+    });
+  };
+})(window);
+</script>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// F1-a PAYMENT LINKS — page (rewritten 2026-11-07 by executor1, per dex-critic ruling).
+//
+// WHY THE REWRITE (the false-green that cost this rewrite):
+//   The previous page passed its OWN selftest 45/45 and its negcontrol — but the mock it tested
+//   against was a DIFFERENT CONTRACT than the chain. It hashed a skeleton Forwarder (2504-byte
+//   0x60e0…, 3 immutables, ctor (dest,ref)) with salt = keccak(abi.encode(dest,ref)) and a
+//   0x…c0de stub registry. The chain's P2 Registry mints a DIFFERENT Forwarder (2124-byte 0x60c0…,
+//   2 immutables, ctor (registry,dest)) with salt = keccak(abi.encodePacked(CALLER, nonce, dest)),
+//   deployer = the Registry itself. So the page derived 0x17367ec7… for a destination the chain
+//   actually mints 0x712D1883… for — a page shipped as-is would build links paying the WRONG address.
+//   "Green" meant green against the wrong target. The fix is not a stub re-point: it is the LIVE
+//   preimage + the LIVE call signatures.
+//
+// TWO SOURCES OF TRUTH, LABELLED (dex-critic ruling 2):
+//   1. PRIMARY = one RPC read: `predictDepositFor(dest)` on the LIVE RequestRegistry. That is the
+//      chain answering "what will request(dest) mint". Build uses this.
+//   2. CROSS-CHECK = `mirrorDeposit(...)`, an offline re-implementation of the EXACT live formula
+//      (below), pinned to `cast` literals and validated against a LIVE mint in page/accept_live.mjs.
+//      It gives the link teeth when offline and verifies an opened link with no RPC.
+//   The bug was letting a WRONG offline impl be the only source; now the offline path is validated
+//   against the chain, not trusted on its own.
+//
+// THE LIVE FORMULA (cracked + reproduced byte-for-byte, dex-executor1 2026-11-07):
+//   salt    = keccak256(abi.encodePacked(caller=RequestRegistry, registryNonce, destination))
+//   deployer= the P2 Registry (Registry.register does CREATE2 → address(this))
+//   initCode= Forwarder.creationCode ++ abi.encode(P2Registry, destination)
+//   addr    = keccak256(0xff ++ deployer ++ salt ++ keccak256(initCode))[12:]
+//   `registryNonce` = P2Registry.nonce(RequestRegistry) — the Registry's per-caller nonce.
+//   NOTE (product truth): `predictDepositFor` is NONCE-BASED, so it points at the *next* nonce and
+//   SHIFTS after every request (proved live). A link therefore carries `n` (the nonce it was minted
+//   at); verify recomputes the mirror at `n`, which is stable even after the live nonce moves on.
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+// ── DOM helpers (the page's own; deliberately NOT supplied by the selftest shim) ─────────
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+//
+// TOP-LEVEL, not inside the QR IIFE below: the page's own rpcEthCall() calls `_fetchT` bare, and a
+// function declared inside the IIFE is not in that scope. The bundle hid this (gen_lib injects the
+// shared lib.js, which publishes `_fetchT` on globalThis), so only the OFF-BUNDLE selftest caught it
+// — as "registry nonce read failed: _fetchT is not defined". A source page must stand alone.
+
+const $ = (id) => document.getElementById(id);
+const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+function setRows(rows){
+  const w = $("rows"); if (!w) return;
+  w.innerHTML = rows.map(([k,v,mono]) =>
+    `<div class="row"><span class="k">${escapeHtml(k)}</span><span class="v${mono?" mono":""}">${escapeHtml(v)}</span></div>`
+  ).join("");
+}
+function setText(id, t){ const e=$(id); if(e) e.textContent = t; }
+function show(id,on){ const e=$(id); if(e) e.classList[on?"remove":"add"]("hide"); }
+
+// ── the hand-off QR: a link is meant to be SHOWN, not typed. Reuses the inline encoder (no deps);
+//    draws the link (scan to pay) and, when known, the deposit address, into #qrow.
+function showQR(link, deposit){
+  const w = $("qrow"); if (!w) return;
+  if (!link){ w.classList.add("hide"); w.innerHTML = ""; return; }
+  w.innerHTML =
+    `<div style="text-align:center"><div class="mono" style="margin-bottom:6px">scan to pay</div>${qrHTML(link,200)}</div>` +
+    (deposit ? `<div style="text-align:center"><div class="mono" style="margin-bottom:6px">deposit address</div>${qrHTML(deposit.toLowerCase(),200)}</div>` : "");
+  w.classList.remove("hide");
+  try { drawQRs(w); } catch(e){}
+}
+
+// ── config — the ONE place that names the chain. Addresses copied from files, never retyped. ──
+// Default = Base MAINNET. RELAUNCH 2026-11-12: Base carries the NEW line, RequestRegistry
+// 0xeD395024… (one CREATE2 address on Base/OP/Uni, codehash-proven). Base Sepolia was NOT redeployed
+// and keeps the v1 pair (0xe9515881… / 0x9651cD59…), still live on-chain. Same bare string is also
+// the OP/Arb P3 Router, but chain-scoped (GOTCHAS #95): that is why every net row carries its own address.
+// Base Sepolia stays a SELECTABLE net (the offline vectors are pinned to it via _pinFix()).
+// NB mainnet and Sepolia NO LONGER share an address: the v2 audit-fix redeploy (2026-11-09) landed on
+// Base ONLY, so base_sepolia keeps the v1 pair while base carries the v2 pair (same code, new CREATE).
+// RPC: mainnet.base.org is hard-429 on this host, so mainnet uses publicnode.
+const CFG = {
+  net: "base",
+  nets: {
+    base_sepolia: { chainId: 84532, p2Registry: "0xe9515881fe6976eD9CB55328B8308F6eF7c311a8",
+                    requestRegistry: "0x9651cD591cFe33E1b684e5d8541940e78724c749",
+                    // ENDPOINT-POLICY: publicnode first; sepolia.base.org alt (echoes Origin, 200-block
+                    // getLogs cap, -32614 measured 2026-11-12 — and NOT the 25/s limit mainnet has).
+                    rpc: "https://base-sepolia-rpc.publicnode.com",
+                    alts: ["https://sepolia.base.org"],
+                    token: { sym:"USDC", dec:6 },
+                    tokenAddr: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" },
+    base:         { chainId: 8453,  p2Registry: "0x417c41d406c61E09958032Cd77338fc1F1ac7D45",
+                    requestRegistry: "0xeD395024Bba719564bec617b6b42CF6fDC8a252c",
+                    rpc: "https://base-rpc.publicnode.com", token: { sym:"USDC", dec:6 },
+                    tokenAddr: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" },
+  },
+  // The LIVE P2 Forwarder creationCode (3631 bytes), copied verbatim from
+  // p2-forwarder/out/Forwarder.sol/Forwarder.json — the SAME 7262-hex artifact the deployed P2
+  // Registry embeds (proved by substring match against its runtime code). NOT the old 2124-byte
+  // 0x60c0… skeleton: a different body is a different initCodeHash and therefore always a different
+  // address, which is what made this page derive an address the chain never minted.
+  forwarderCreationCode: "0x60c060405234801561000f575f5ffd5b50604051610e2f380380610e2f83398101604081905261002e9161009f565b6001600160a01b038216158061004b57506001600160a01b038116155b15610069576040516362c0b8cd60e11b815260040160405180910390fd5b6001600160a01b039182166080521660a05260015f556100d0565b80516001600160a01b038116811461009a575f5ffd5b919050565b5f5f604083850312156100b0575f5ffd5b6100b983610084565b91506100c760208401610084565b90509250929050565b60805160a051610d076101285f395f8181610182015281816102df01526104be01525f818160d101528181610310015281816103cb01528181610576015281816106290152818161070c015261078c0152610d075ff3fe60806040526004361061004d575f3560e01c80637b103999146100c057806395ccf8bf14610110578063a47cfb5614610144578063b269681d14610171578063c7da3328146101a45761008c565b3661008c576040513481525f9033907f5548c837ab068cf56a2c2479df0882a4922fd203edb7517321831d95078c5f62906020015b60405180910390a3005b6040513481525f9033907f5548c837ab068cf56a2c2479df0882a4922fd203edb7517321831d95078c5f6290602001610082565b3480156100cb575f5ffd5b506100f37f000000000000000000000000000000000000000000000000000000000000000081565b6040516001600160a01b0390911681526020015b60405180910390f35b34801561011b575f5ffd5b5061012f61012a366004610b87565b6101cf565b60408051928352602083019190915201610107565b34801561014f575f5ffd5b5061016361015e366004610bbe565b610521565b604051908152602001610107565b34801561017c575f5ffd5b506100f37f000000000000000000000000000000000000000000000000000000000000000081565b3480156101af575f5ffd5b506101636101be366004610bbe565b60016020525f908152604090205481565b5f5f5f546001146101f3576040516303cb96db60e21b815260040160405180910390fd5b60025f9081556001600160a01b03851615610273576040516370a0823160e01b81523060048201526001600160a01b038616906370a0823190602401602060405180830381865afa15801561024a573d5f5f3e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061026e9190610bd9565b610275565b475b6001600160a01b0386165f908152600160205260409020549091508082116102a4575f5f935093505050610514565b5f6102af8284610c04565b9050805f036102c6575f5f94509450505050610514565b6102cf81610704565b95509350841561030457610304877f000000000000000000000000000000000000000000000000000000000000000087610818565b831561049657610394877f00000000000000000000000000000000000000000000000000000000000000006001600160a01b031663469048406040518163ffffffff1660e01b8152600401602060405180830381865afa15801561036a573d5f5f3e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061038e9190610c17565b866109d3565b610496576103a28483610c32565b60015f896001600160a01b03166001600160a01b031681526020019081526020015f20819055507f00000000000000000000000000000000000000000000000000000000000000006001600160a01b031663469048406040518163ffffffff1660e01b8152600401602060405180830381865afa158015610425573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906104499190610c17565b6001600160a01b0316876001600160a01b03167fd0d8d553933ef60036b53477b6f0af840f1f8b6642315c929b423cb682e5f1008660405161048d91815260200190565b60405180910390a35b60408051828152602081018690529081018690523360608201526001600160a01b03808916917f00000000000000000000000000000000000000000000000000000000000000008216918916907f7d553ce3b68faaa050a55e7666c3894ac5cca5e507bf8b0d2e0faa4c06aa23c39060800160405180910390a45050505b60015f5590939092509050565b5f5f54600114610544576040516303cb96db60e21b815260040160405180910390fd5b5060025f9081556001600160a01b0382168152600160205260408120549081900361057057505f6106fb565b6105fa827f00000000000000000000000000000000000000000000000000000000000000006001600160a01b031663469048406040518163ffffffff1660e01b8152600401602060405180830381865afa1580156105d0573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906105f49190610c17565b836109d3565b156106f8575f60015f846001600160a01b03166001600160a01b031681526020019081526020015f20819055507f00000000000000000000000000000000000000000000000000000000000000006001600160a01b031663469048406040518163ffffffff1660e01b8152600401602060405180830381865afa158015610683573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906106a79190610c17565b6001600160a01b0316826001600160a01b03167f3ee0561a5cccd92aaeab4a2b27ecfda4bfa9ea969160c13471e39daa6ff84b4b836040516106eb91815260200190565b60405180910390a36106fb565b505f5b60015f55919050565b5f5f61080f837f00000000000000000000000000000000000000000000000000000000000000006001600160a01b03166324a9d8536040518163ffffffff1660e01b8152600401602060405180830381865afa158015610766573d5f5f3e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061078a9190610c45565b7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b03166324ec75906040518163ffffffff1660e01b8152600401602060405180830381865afa1580156107e6573d5f5f3e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061080a9190610bd9565b610b0b565b91509150915091565b6001600160a01b0383166108c5575f826001600160a01b0316826040515f6040518083038185875af1925050503d805f811461086f576040519150601f19603f3d011682016040523d82523d5f602084013e610874565b606091505b50509050806108bf5760405162461bcd60e51b81526020600482015260126024820152711b985d1a5d99481cd95b990819985a5b195960721b60448201526064015b60405180910390fd5b50505050565b604080516001600160a01b038481166024830152604480830185905283518084039091018152606490920183526020820180516001600160e01b031663a9059cbb60e01b17905291515f928392908716916109209190610c66565b5f604051808303815f865af19150503d805f8114610959576040519150601f19603f3d011682016040523d82523d5f602084013e61095e565b606091505b50915091508180156109885750805115806109885750808060200190518101906109889190610c7c565b6109cc5760405162461bcd60e51b8152602060048201526015602482015274195c98cc8c081d1c985b9cd9995c8819985a5b1959605a1b60448201526064016108b6565b5050505050565b5f6001600160a01b038416610a3c575f836001600160a01b0316836040515f6040518083038185875af1925050503d805f8114610a2b576040519150601f19603f3d011682016040523d82523d5f602084013e610a30565b606091505b50909250610b04915050565b604080516001600160a01b038581166024830152604480830186905283518084039091018152606490920183526020820180516001600160e01b031663a9059cbb60e01b17905291515f92839290881691610a979190610c66565b5f604051808303815f865af19150503d805f8114610ad0576040519150601f19603f3d011682016040523d82523d5f602084013e610ad5565b606091505b5091509150818015610aff575080511580610aff575080806020019051810190610aff9190610c7c565b925050505b9392505050565b5f5f828511610b1e57505f905083610b43565b610b288585610b4b565b915082821015610b36578291505b610b408286610c04565b90505b935093915050565b5f612710610b5d61ffff841685610c9b565b610b679190610cb2565b90505b92915050565b6001600160a01b0381168114610b84575f5ffd5b50565b5f5f60408385031215610b98575f5ffd5b8235610ba381610b70565b91506020830135610bb381610b70565b809150509250929050565b5f60208284031215610bce575f5ffd5b8135610b0481610b70565b5f60208284031215610be9575f5ffd5b5051919050565b634e487b7160e01b5f52601160045260245ffd5b81810381811115610b6a57610b6a610bf0565b5f60208284031215610c27575f5ffd5b8151610b0481610b70565b80820180821115610b6a57610b6a610bf0565b5f60208284031215610c55575f5ffd5b815161ffff81168114610b04575f5ffd5b5f82518060208501845e5f920191825250919050565b5f60208284031215610c8c575f5ffd5b81518015158114610b04575f5ffd5b8082028115828204841417610b6a57610b6a610bf0565b5f82610ccc57634e487b7160e01b5f52601260045260245ffd5b50049056fea2646970667358221220c8c2f87219763fdfbc6778e0675c83cc6a357b797437c41710e0df92677a0d5d64736f6c63430008220033",
+  feeBps: 500,         // last-known live value; the P2 Registry's feeBps() is owner-settable and
+                       // has moved (25 -> 100 -> 500). refreshFee() re-reads it live on load, so this
+                       // literal only stands when offline — and it must match what the chain says today.
+  // Pay-link BASE. treasury-desk.org was registered 2026-11-04 (Njalla NS) but has NO A/CNAME yet,
+  // so every link built against it is dead on arrival — and the LINK IS THE PRODUCT. Point at the
+  // in-repo pay page until the domain answers `dig`, then flip the default back to it that day.
+  // ?base= lets the real domain be tested without a redeploy. Links stay ABSOLUTE (pasted into email/WhatsApp).
+  base: (new URLSearchParams(location.search)).get("base") || "https://dngr2.github.io/dex-products/f1a-payment-links/payme/",
+  mode: "create",      // "create" | "pay"
+};
+function net(){ return CFG.nets[CFG.net]; }
+
+// ── REF FORMAT SPEC (unchanged) — a label distinguishing two requests to the SAME destination ──
+//   hex form 0x+1..64 hex -> left-padded bytes32 ; utf8 1..32 bytes ; empty = all-zero word.
+//   NOTE (live): the CHAIN's salt binds (caller, nonce, dest) — NOT (dest, ref). So two requests to
+//   the same destination get DIFFERENT addresses because the nonce advances (proven live). `ref`
+//   stays as a human label carried in the URL and the memo; it is no longer the collision key.
+const REF_MAX_BYTES = 32;
+function validateRef(ref){
+  ref = (ref || "").trim();
+  if (!ref) return { ok:true, why:"(empty)" };
+  if (/^0x[0-9a-fA-F]*$/.test(ref)){
+    const n = (ref.length - 2);
+    if (n < 1 || n > 64) return { ok:false, why:"hex ref must be 1..64 hex chars" };
+    return { ok:true, why:"hex bytes32" };
+  }
+  const b = Array.from(new TextEncoder().encode(ref));
+  if (b.length > REF_MAX_BYTES) return { ok:false, why:`ref is ${b.length} bytes (max ${REF_MAX_BYTES})` };
+  return { ok:true, why:"utf8 label" };
+}
+function refBytes32Hex(ref){
+  if (!ref) return "00".repeat(32);
+  if (/^0x[0-9a-fA-F]{1,64}$/.test(ref)) return strip0x(ref).padStart(64, "0");
+  const b = Array.from(new TextEncoder().encode(ref)).slice(0, 32);
+  while (b.length < 32) b.push(0);
+  return b.map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+// ── hex / bigint helpers ────────────────────────────────────────────────────────────────
+const strip0x = (h) => (h || "").replace(/^0x/i, "").toLowerCase();
+function hexToBytes(h){ h = strip0x(h); if (h.length % 2) h = "0" + h; const out=[];
+  for (let i=0;i<h.length;i+=2) out.push(parseInt(h.slice(i,i+2),16)); return out; }
+const pad32 = (h) => strip0x(h).padStart(64, "0");
+const pad20 = (h) => strip0x(h).padStart(40, "0");
+const wordUint = (v) => BigInt(v).toString(16).padStart(64, "0");        // uint256 -> 64 hex
+const wordAddr = (a) => strip0x(a).padStart(64, "0");                    // address -> 64 hex (LEFT)
+function bytesToHex(b){ let s=""; for(const x of b) s+=x.toString(16).padStart(2,"0"); return s; }
+// CREATE2: keccak256(0xff ++ deployer(20) ++ salt(32) ++ initCodeHash(32))[12:]
+function create2(deployer, saltHex, initCodeHashHex){
+  const bytes = [0xff].concat(hexToBytes(pad20(deployer)), hexToBytes(pad32(saltHex)), hexToBytes(pad32(initCodeHashHex)));
+  return "0x" + keccak256hex(bytes).slice(24);   // last 20 bytes
+}
+
+// ── THE LIVE DERIVATION MIRROR (offline cross-check; validated vs a live mint in accept_live) ──
+// Exact live formula. `caller` = the RequestRegistry (the salt owner); deployer = the P2 Registry;
+// nonce = P2Registry.nonce(caller); initCode args = (P2Registry, destination).
+function saltFor(caller, nonce, dest){
+  return "0x" + keccak256hex(hexToBytes(strip0x(caller) + pad32("0x"+wordUint(nonce)) + strip0x(dest)));
+}
+function initCodeHashFor(p2Registry, dest){
+  const code = hexToBytes(CFG.forwarderCreationCode).concat(hexToBytes(wordAddr(p2Registry) + wordAddr(dest)));
+  return "0x" + keccak256hex(code);
+}
+function mirrorDeposit(caller, p2Registry, nonce, dest){
+  return create2(p2Registry, saltFor(caller, nonce, dest), initCodeHashFor(p2Registry, dest));
+}
+// Self-consistency: what the page's OWN mirror says for the CURRENT config + nonce.
+function mirrorFor(dest, nonce){
+  const n = net();
+  return mirrorDeposit(n.requestRegistry, n.p2Registry, nonce, dest);
+}
+
+// ── human <-> base units (bigint; never float) ─────────────────────────────────────────────
+function parseHuman(str, dec){
+  str = (str || "").trim(); if (!str) return 0n;
+  const [w, f=""] = str.split(".");
+  const frac = (f + "0".repeat(dec)).slice(0, dec);
+  return BigInt(w || "0") * (10n ** BigInt(dec)) + BigInt(frac || "0");
+}
+function fmtUnits(u, dec){
+  const neg = u < 0n; u = neg ? -u : u;
+  const s = u.toString().padStart(dec + 1, "0");
+  const whole = s.slice(0, s.length - dec), frac = s.slice(s.length - dec).replace(/0+$/, "");
+  return (neg ? "-" : "") + whole + (frac ? "." + frac : "");
+}
+const shortAddr = (a) => a ? a.slice(0,6) + "…" + a.slice(-4) : "";
+
+// ── link build / parse / verify (carries `n` so it verifies without RPC) ──────────────────
+function buildLink({ to, ref, amountUnits, memo, n }){
+  const d = mirrorFor(to, n);                 // offline build; live build calls predictDepositFor then asserts == this
+  const q = new URLSearchParams({ ch:String(net().chainId), tk:net().token.sym, to, d, n:String(n), amt:String(amountUnits) });
+  if (ref) q.set("ref", ref);
+  if (memo) q.set("memo", memo);
+  return CFG.base + "#" + q.toString();
+}
+function parseLink(link){
+  const i = (link || "").indexOf("#"); if (i < 0) return null;
+  const q = new URLSearchParams(link.slice(i + 1));
+  const to = q.get("to"), amt = q.get("amt"); if (!to || amt == null) return null;
+  const n = q.get("n"); if (n == null || !/^\d+$/.test(n)) return null;
+  return { ch:q.get("ch"), tk:q.get("tk"), to, d:q.get("d"), n:Number(n), ref:q.get("ref") || "", amountUnits:BigInt(amt), memo:q.get("memo") || "" };
+}
+// A pay link VERIFIES ITSELF: the deposit address it carries must equal the mirror at its own `n`.
+function verifyLink(link){
+  const r = parseLink(link); if (!r) return { ok:false, why:"unparseable" };
+  const expect = mirrorFor(r.to, r.n);
+  return { ok: expect.toLowerCase() === (r.d||"").toLowerCase(), expect, got: r.d, why: expect.toLowerCase()===(r.d||"").toLowerCase() ? "ok" : "deposit != mirror(to,n; live formula)" };
+}
+
+// ── the ONE RPC read (primary path when a network is present) ─────────────────────────────
+// ENDPOINT-POLICY: rotate primary -> alts per attempt (GOTCHA #147(b)); the read used to have no
+// retry and no alt, so one rate-limited or dead host was a hard failure on a money leg.
+async function rpcEthCall(to, data, tries = 3){
+  const n = net(), urls = [n.rpc, ...(n.alts || [])].filter((u, i, a) => a.indexOf(u) === i);
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const body = { jsonrpc:"2.0", id:1, method:"eth_call", params:[{ to, data }, "latest"] };
+      const res = await _fetchT(urls[Math.min(i, urls.length - 1)], { method:"POST", headers:{ "content-type":"application/json" }, body:JSON.stringify(body) });
+      const j = await res.json(); if (j.error) throw new Error(j.error.message || "rpc error");
+      if (j.result === undefined) throw new Error(`rpc ${res.status} (no result)`);
+      return j.result;
+    } catch (e) { last = e; if (i < tries - 1) await new Promise((s) => setTimeout(s, 400 * (i + 1))); }
+  }
+  throw last;
+}
+// predictDepositFor(address) -> address ; selector 0xd6d52f00 (cast sig)
+async function livePredict(dest){
+  const r = await rpcEthCall(net().requestRegistry, "0xd6d52f00" + wordAddr(dest));
+  return "0x" + strip0x(r).slice(24);
+}
+// nonce(address) on the P2 Registry -> uint256 ; selector 0x70ae92d2 (cast sig)
+async function liveNonce(){
+  const r = await rpcEthCall(net().p2Registry, "0x70ae92d2" + wordAddr(net().requestRegistry));
+  return Number(BigInt(r));
+}
+// feeBps() on the P2 Registry -> uint16 ; selector 0x24a9d853 (cast sig). The fee is
+// OWNER-SETTABLE and has ALREADY moved (25 -> 100 -> 500), so a literal display would silently date.
+// Best-effort: a read failure keeps the baked-in default and the page stays usable offline.
+async function refreshFee(){
+  try {
+    const r = await rpcEthCall(net().p2Registry, "0x24a9d853");
+    const bps = Number(BigInt(r) % (1n << 16n));
+    if (bps > 0 && bps < 10000) CFG.feeBps = bps;
+  } catch { /* keep default */ }
+  return CFG.feeBps;
+}
+
+// ── self-check vectors — ground truth from `cast` / a LIVE mint (executor1, 2026-11-07) ────
+const VEC = {
+  // BASE (mainnet) path — caller = the live RequestRegistry, deployer = the live P2 Registry.
+  // P2.nonce(RequestRegistry) is 0 today (read live), so nonce 0 is the live-verifiable row: each
+  // dep0 below is what `predictDepositFor(dest)` answers on the chain RIGHT NOW, for its dest.
+  caller: "0xeD395024Bba719564bec617b6b42CF6fDC8a252c",
+  p2:     "0x417c41d406c61E09958032Cd77338fc1F1ac7D45",
+  dest:   "0xDE57000000000000000000000000000000000000",
+  nonce:  0,
+  salt:   "0xffcd45625c663b646ebdd44232aca1256706a86b46c5dd2b386f1c77cd275ba5",  // cast: packed(caller,0,dest)
+  ich:    "0x8dd6f29d406bc71a0588a674ef61191de79a0386c48da41dfbf1583c8e5c4fa8",  // keccak(realCode ++ enc(p2,dest))
+  deposit:"0x987C2B58b8cD4680c236D2cCBB61823168A238a6",  // == live predictDepositFor(dest) (nonce 0)
+  // the NEXT nonce: cast-derived (the chain has not minted it yet, so there is no live literal)
+  nonce2: 1,
+  deposit2: "0xA7ddA574E3C7d33de76CB7F4f1c162E3121FaD2e",
+  // different destination at the same nonce -> different address (ref is NOT the nonce any more)
+  destB: "0x1111000000000000000000000000000000000000",
+  depositB: "0x6176e78dD822CD33d0F55B5AEf216A03389c7aE6",  // == live predictDepositFor(destB) (nonce 0)
+  strRef: "inv-7",
+};
+function _pinFix(){ const s=CFG.net; CFG.net="base"; return s; }   // vectors are the live Base path
+const SELFCHECK = [
+  { what:"mirror salt = cast literal", got:()=>{ const s=_pinFix(); try { return saltFor(VEC.caller, VEC.nonce, VEC.dest); } finally { CFG.net=s; } }, want:VEC.salt },
+  { what:"mirror initCodeHash = cast literal", got:()=>{ const s=_pinFix(); try { return initCodeHashFor(VEC.p2, VEC.dest); } finally { CFG.net=s; } }, want:VEC.ich },
+  { what:"mirror deposit (live nonce 0) = LIVE predictDepositFor literal", got:()=>{ const s=_pinFix(); try { return mirrorDeposit(VEC.caller, VEC.p2, VEC.nonce, VEC.dest); } finally { CFG.net=s; } }, want:VEC.deposit },
+  { what:"mirror deposit (next nonce 1) = cast literal", got:()=>{ const s=_pinFix(); try { return mirrorDeposit(VEC.caller, VEC.p2, VEC.nonce2, VEC.dest); } finally { CFG.net=s; } }, want:VEC.deposit2 },
+  { what:"different dest @ same nonce -> different addr", got:()=>{ const s=_pinFix(); try { return mirrorDeposit(VEC.caller, VEC.p2, VEC.nonce, VEC.destB); } finally { CFG.net=s; } }, want:VEC.depositB },
+  // bps-agnostic: the fee is owner-settable, so expect whatever feeBps() currently is — never a
+  // frozen "100bps". `want` is a thunk so it re-derives from the live CFG.feeBps at check time.
+  { what:()=>`fee split exact (${CFG.feeBps}bps of 1e6)`, got:()=>{ const f=feeUnits(1000000n); return `${f.fee}+${f.net}=${f.fee+f.net}`; },
+    want:()=>{ const fee=(1000000n*BigInt(CFG.feeBps))/10000n; return `${fee}+${1000000n-fee}=1000000`; } },
+];
+function feeUnits(amountUnits){ const bps=BigInt(CFG.feeBps); const fee=(amountUnits*bps)/10000n; return { fee, net:amountUnits-fee }; }
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// T3-a — THE COMPOUNDING LOOP (payer -> merchant). ZERO new contracts, ZERO new keys.
+//
+// WHAT THE PAYER MINTS (the exact answer, in writing): NOTHING NEW. The payer's link is
+// `buildLink({ to: payerAddr })` — `to` is the address the payer ALREADY has (the one they paid
+// from); its deposit address is a LIVE `predictDepositFor(payerAddr)` read. So a participant needs
+// no keypair beyond their wallet, no registry entry of their own, and no deploy. Pure reuse.
+//
+// WHAT "COMPOUNDS": the link TREE. A payment through a child link auto-forwards straight to the
+// child's owner, so every hop mints a new merchant who can mint again — reach is k^depth.
+// HONEST LIMIT (stated, not assumed): the contract has NO ancestor cut — the whole fee (500 bps
+// today, owner-settable) goes to the ONE treasury, nothing flows up an edge. The payer's real
+// incentive is FEE-RECOUP: one recruited peer paying a like amount pays THEM the same fee they paid,
+// recovering their own fee 1:1 in one hop.
+// `feeRecoup()` makes that exact (bigint) instead of hand-waving "pyramid".
+//
+// NO DOUBLE-COUNT A ROUND: a minted link's IDENTITY is (to, nonce). Live, `request()` consumes the
+// registry nonce, so a nonce is globally unique — a repeated (to,nonce) is the SAME link re-counted,
+// not a new round. `loopSteps()` dedupes on it and `loopRounds()` = nodes-1, so a 2-step replay of
+// one node is 0 rounds, not 1. That is the invariant the tooth pins.
+function loopKey(to, n){ return (to||"").toLowerCase() + "@" + String(n); }
+function loopSteps(pairs){
+  const seen=new Set(), nodes=[];
+  for(const [to,n] of (pairs||[])){ const k=loopKey(to,n); if(seen.has(k)) continue; seen.add(k); nodes.push({to,n}); }
+  return nodes;
+}
+function loopRounds(nodes){ return Math.max(0, (nodes||[]).length - 1); }
+// HONEST fee math (bigint, exact) — and the honest LIMIT, because the naive read is wrong:
+// the peer's fee ALSO goes to the ONE treasury. There is NO up-cut, so the payer earns no
+// residual. What the loop actually does is make the payer a zero-cost RECEIVE rail; the metric
+// that is true is TREASURY fee generated per recruit. `recouped` therefore means "the rail has
+// generated as much fee as you paid once a peer pays a like amount" — break-even reach, not cash
+// back to you. (`youNet` is what lands in your wallet when a peer pays: Y − fee, same as a direct
+// transfer, so the rail costs the payer nothing on the inbound either.)
+function feeRecoup(youPaidUnits, peerPaysUnits){
+  const yourFeePaid = feeUnits(youPaidUnits).fee;        // the fee YOU paid, -> treasury
+  const feeFromPeer = feeUnits(peerPaysUnits).fee;       // the same fee a peer pays, -> treasury
+  return { yourFeePaid, feeFromPeer, youNet: feeUnits(peerPaysUnits).net,
+           recouped: feeFromPeer >= yourFeePaid };
+}
+
+// The payer's OWN link. STRICT: it must resolve through the LIVE registry (#112 class — a link
+// derived only from a local mirror can be false-green against the chain). Returns
+// {ok:false, why} LOUD when the registry read fails, never a bogus address dressed as success.
+// (create-mode may fall back to the mirror; THIS step may not — it is the recursive edge, and an
+// edge that points at the wrong address silently is exactly the bug the loop would compound.)
+async function childLinkLive(payer, amountUnits=0n, memo=""){
+  if (!/^0x[0-9a-fA-F]{40}$/.test(payer||"")) return { ok:false, why:"payer must be a 0x…40-hex address" };
+  let n, live;
+  try { n = await liveNonce(); } catch(e){ return { ok:false, why:"registry nonce read failed: "+e.message }; }
+  try { live = await livePredict(payer); } catch(e){ return { ok:false, why:"live predictDepositFor failed: "+e.message }; }
+  const mirror = mirrorFor(payer, n);
+  if (mirror.toLowerCase() !== live.toLowerCase())
+    return { ok:false, why:`mirror ${mirror} != live ${live}`, mirror, live, n };
+  const link = buildLink({ to:payer, ref:"own", amountUnits, memo, n });
+  return { ok:true, link, d:live, n, payer };
+}
+
+function selfCheck(){
+  const bad = [];
+  const v = (x) => typeof x === "function" ? String(x()) : String(x);   // what/want may be thunks
+  for (const t of SELFCHECK){ let g; try { g = String(t.got()); } catch(e){ g = "ERR:"+e.message; }
+    const w = v(t.want);
+    if (g.toLowerCase() !== w.toLowerCase()) bad.push(`${v(t.what)}: got ${g} want ${w}`); }
+  // roundtrip tooth (carries n)
+  const rec = { to:VEC.dest, ref:"inv-7", amountUnits:1500000n, memo:"invoice 7", n:VEC.nonce };
+  const l = buildLink(rec), p = parseLink(l);
+  if (!p || p.to!==rec.to || p.amountUnits!==rec.amountUnits || p.memo!==rec.memo || p.n!==rec.n) bad.push("buildLink->parseLink roundtrip lost data");
+  if (!verifyLink(l).ok) bad.push("a link the page just built failed self-verification");
+  if (parseHuman("1.000001",6) !== 1000001n || fmtUnits(1000001n,6) !== "1.000001") bad.push("human<->units roundtrip");
+  return bad;
+}
+
+// ── render ──────────────────────────────────────────────────────────────────────────────
+// ── T3-a surface: the payer's OWN child link (recursive edge of the loop) ─────────────────
+function renderLoop(){
+  setText("title","Your own link"); setText("badge","payer → merchant");
+  setText("sub","After you pay someone, mint the SAME kind of link for your own address. Same page, no account, no new keys — you become the merchant.");
+  $("form").innerHTML =
+    `<label for="payer">Your wallet (the address you paid from)</label><input id="payer" placeholder="0x…" value="${VEC.dest}">` +
+    `<label for="peer">A peer's expected payment (${net().token.sym}, optional)</label><input id="peer" placeholder="1.00" value="">` +
+    `<label for="memo2">Memo (optional)</label><input id="memo2" placeholder="your own note" value="">`;
+  setText("go","Mint my own link");
+  setRows([]); show("out",false); showQR("");
+}
+function renderLoopResult(payer, link, d, peerUnits){
+  const rows = [
+    ["Your link's deposit", d, true],
+    ["Resolves via", "LIVE predictDepositFor on the registry", false],
+    ["Forwards to", shortAddr(payer), true],
+    ["You pay", "0 gas — minting is a view read, not a tx", false],
+  ];
+  if (peerUnits > 0n){
+    // honest, exact: the peer's own fee goes to the treasury too — there is NO up-cut. What you
+    // GET is the forwarded payment (Y − fee), same as any inbound transfer; what the loop adds is
+    // that YOUR link now generates treasury fee without you doing anything.
+    const r = feeRecoup(peerUnits, peerUnits);
+    rows.push(["If a peer pays " + fmtUnits(peerUnits,net().token.dec) + " through YOUR link",
+               `you receive ${fmtUnits(r.youNet,net().token.dec)} ${net().token.sym} (Y − fee); treasury also takes ${fmtUnits(r.feeFromPeer,net().token.dec)}`, false]);
+    rows.push(["Your subtree has then generated", `${fmtUnits(r.feeFromPeer,net().token.dec)} in fees vs the ${fmtUnits(r.yourFeePaid,net().token.dec)} you paid — ${r.recouped?"≥ break-even":"below break-even"}`, false]);
+  }
+  rows.push(["No up-cut (stated)", "every hop's fee goes to the ONE treasury; nothing flows up an edge. So this compounds REACH (each payer is a new merchant), not your per-hop cash — say so, don't imply a pyramid payout.", false]);
+  setRows(rows);
+  const dot=$("dot"); if(dot) dot.className = "dot";
+}
+
+function renderCreate(){
+  setText("title","Pay Link");
+  $("form").innerHTML =
+    `<label for="to">Destination (your wallet)</label><input id="to" placeholder="0x…" value="${VEC.dest}">` +
+    `<label for="amt">Amount (${net().token.sym})</label><input id="amt" placeholder="1.00" value="1.00">` +
+    `<label for="ref">Reference (optional)</label><input id="ref" placeholder="invoice / order id" value="">`;
+  setText("go","Create link");
+  setRows([]); show("out",false); showQR("");
+}
+function renderPay(link){
+  setText("title","Pay"); setText("badge","link");
+  const r = link ? parseLink(link) : null;
+  if (!r){ setRows([["status","paste a link below"]]); showQR(""); return; }
+  const v = verifyLink(link), f = feeUnits(r.amountUnits);
+  const rows = [
+    ["Pay to (deposit)", v.got || "—", true],
+    ["Destination", shortAddr(r.to), true],
+    ["Amount", `${fmtUnits(r.amountUnits,net().token.dec)} ${r.tk}`, false],
+    ["Fee ("+CFG.feeBps+" bps)", `${fmtUnits(f.fee,net().token.dec)} ${r.tk}`, false],
+    ["Net forwarded", `${fmtUnits(f.net,net().token.dec)} ${r.tk}`, false],
+    ["Creator pays", "0 gas — link needs no deploy tx", false],
+    ["Verified", v.ok ? "deposit == mirror(to, n; live formula)" : "MISMATCH: "+v.why, false],
+  ];
+  if (r.memo) rows.push(["Memo", r.memo, false]);
+  setRows(rows);
+  const dot = $("dot"); if (dot) dot.className = "dot" + (v.ok ? "" : " warn");
+  // an OPENED link is also a hand-off: show its QR so a payer can re-scan, or show THIS one to another.
+  showQR(link, v.got);
+}
+
+// n for a new link: live Registry nonce (so the link matches what request() WILL mint); offline fallback.
+async function currentNonce(){
+  try { return await liveNonce(); } catch(e){ return VEC.nonce; }
+}
+// Build a link, preferring the LIVE predict read and cross-checking the mirror against it.
+async function buildLinkLive({ to, ref, amountUnits, memo }){
+  let n = await currentNonce();
+  let live = null, warn = "";
+  try {
+    live = await livePredict(to);
+    const mirror = mirrorFor(to, n);
+    if (mirror.toLowerCase() !== live.toLowerCase()) warn = `mirror ${mirror} != live ${live}`;
+  } catch(e){ warn = "offline (mirror only): " + e.message; }
+  const l = buildLink({ to, ref, amountUnits, memo, n });
+  return { link:l, live, warn };
+}
+
+let _feeRefreshed = false;
+async function main(){
+  // don't block first paint: kick the fee refresh, re-render once it lands. The fee is
+  // OWNER-SETTABLE, so a literal would date — but offline (no fetch) the default stands.
+  if (!_feeRefreshed){ _feeRefreshed = true;
+    refreshFee().then(() => { if (CFG.mode === "pay") renderPay(CFG.link || ""); }).catch(() => {}); }
+  // tab wiring (create / pay / loop) — the three surfaces, one URL
+  const tabs = [["tab-create","create"],["tab-pay","pay"],["tab-loop","loop"]];
+  for (const [id,m] of tabs){ const t=$(id); if(t) t.onclick=()=>{ CFG.mode=m; setTabs(); main(); }; }
+  function setTabs(){ for (const [id,m] of tabs){ const t=$(id); if(t) t.classList[m===CFG.mode?"add":"remove"]("on"); } }
+  setTabs();
+
+  if (CFG.mode === "pay"){
+    renderPay(CFG.link || "");
+    const btn = $("go"); if (btn){ btn.textContent = "Open another"; btn.onclick = ()=>{ const v=prompt("Payment link:"); if(v) renderPay(v); }; }
+    return;
+  }
+  if (CFG.mode === "loop"){
+    renderLoop();
+    const btn = $("go"); if (btn) btn.onclick = async () => {
+      const payer = ($("payer")||{}).value || "", peer = ($("peer")||{}).value || "", memo = ($("memo2")||{}).value || "";
+      let peerUnits = 0n;
+      if (peer){ try { peerUnits = parseHuman(peer, net().token.dec); } catch(e){ peerUnits = 0n; } }
+      show("err",false);
+      const r = await childLinkLive(payer, peerUnits, memo);
+      if (!r.ok){ // LOUD failure — never a bogus address (#112). Also unhide + warn the dot.
+        show("err",true); setText("err","Cannot mint your link: "+r.why);
+        setRows([["mint","FAILED — no live registry answer",false],["reason",r.why,false]]);
+        const dot=$("dot"); if(dot) dot.className="dot warn"; show("out",false); return;
+      }
+      setText("out", r.link); show("out",true);
+      showQR(r.link, r.d);
+      renderLoopResult(payer, r.link, r.d, peerUnits);
+      setText("status", `Your link is live-derived: mirror == predictDepositFor at nonce ${r.n}. Share it; anyone paying it reaches your wallet.`);
+    };
+    return;
+  }
+  renderCreate();
+  const btn = $("go"); if (btn) btn.onclick = async () => {
+    const to = ($("to")||{}).value || "", amt = ($("amt")||{}).value || "", ref = ($("ref")||{}).value || "";
+    if (!/^0x[0-9a-fA-F]{40}$/.test(to)){ show("err",true); setText("err","Destination must be a 0x… 40-hex address"); return; }
+    const vr = validateRef(ref);
+    if (!vr.ok){ show("err",true); setText("err","Reference: "+vr.why); return; }
+    let units; try { units = parseHuman(amt, net().token.dec); }
+    catch(e){ show("err",true); setText("err","Amount must be a number like 1.00"); return; }
+    if (units <= 0n){ show("err",true); setText("err","Amount must be greater than zero"); return; }
+    show("err",false);
+    const { link:l, live, warn } = await buildLinkLive({ to, ref, amountUnits:units });
+    const v = verifyLink(l);
+    setText("out", l); show("out",true);
+    showQR(l, v.got);   // the hand-off: scan-to-pay + the deposit address, from the same link
+    setText("status", v.ok ? (live ? "Link verified: mirror == live predictDepositFor." : "Link built (mirror). "+warn)
+                           : "WARN: "+v.why);
+  };
+}
+
+// — compact keccak256 (full, pad 0x01) — rounded constants verified vs foundry cast ——
+function keccak256hex(bytes){
+  const MASK=(1n<<64n)-1n;
+  const RC=[0x1n,0x8082n,0x800000000000808an,0x8000000080008000n,0x808bn,0x80000001n,0x8000000080008081n,0x8000000000008009n,0x8an,0x88n,0x80008009n,0x8000000an,0x8000808bn,0x800000000000008bn,0x8000000000008089n,0x8000000000008003n,0x8000000000008002n,0x8000000000000080n,0x800an,0x800000008000000an,0x8000000080008081n,0x8000000000008080n,0x80000001n,0x8000000080008008n];
+  const R=[[0,36,3,41,18],[1,44,10,45,2],[62,6,43,15,61],[28,55,25,21,56],[27,20,39,8,14]];
+  const rot=(x,n)=> n===0n?x:(((x<<n)|(x>>(64n-n)))&MASK);
+  const S=new Array(25).fill(0n);
+  const rate=136; const bb=bytes.slice(); bb.push(0x01);
+  while(bb.length%rate!==0) bb.push(0); bb[bb.length-1]|=0x80;
+  for(let off=0; off<bb.length; off+=rate){
+    for(let j=0;j<rate/8;j++){let l=0n;for(let k=0;k<8;k++)l|=BigInt(bb[off+j*8+k])<<(8n*BigInt(k)); S[j]^=l;}
+    for(let rnd=0;rnd<24;rnd++){
+      const C=new Array(5); for(let x=0;x<5;x++) C[x]=S[x]^S[x+5]^S[x+10]^S[x+15]^S[x+20];
+      const D=new Array(5); for(let x=0;x<5;x++) D[x]=C[(x+4)%5]^rot(C[(x+1)%5],1n);
+      for(let x=0;x<5;x++) for(let y=0;y<5;y++) S[x+5*y]^=D[x];
+      const B=new Array(25); for(let x=0;x<5;x++) for(let y=0;y<5;y++) B[y+5*((2*x+3*y)%5)]=rot(S[x+5*y],BigInt(R[x][y]));
+      for(let x=0;x<5;x++) for(let y=0;y<5;y++) S[x+5*y]=B[x+5*y]^((~B[(x+1)%5+5*y])&B[(x+2)%5+5*y]&MASK);
+      S[0]^=RC[rnd];
+    }
+  }
+  let out=""; for(let j=0;j<4;j++){let l=S[j];for(let k=0;k<8;k++){out+=Number(l&0xffn).toString(16).padStart(2,"0"); l>>=8n;}}
+  return out;
+}
+
+main();
+</script>
+
+<div class="dx-foot">
+  <div class="dx-foot-in">
+    <div class="dx-foot-brand"><a href="../index.html">← DEX fleet</a>
+      <span>truth-only · every number read on-chain</span></div>
+    <nav class="dx-foot-nav" aria-label="All pages"><a href="../subscribe/index.html">Subscriptions</a><a href="../merchant/index.html">For merchants</a><a href="../g2b-escrow/index.html">Escrow</a><a href="../g2a-streams/index.html">Streams</a><a href="../f1a-payment-links/index.html">Payment links</a><a href="../p2-forwarder/index.html">Forwarder</a><a href="../p3-router/index.html">Swap router</a><a href="../g4b-receipts/index.html">Receipts</a><a href="../g3a-sponsorship/index.html">Gasless</a><a href="../f1c-duster/index.html">Dust → USDC</a><a href="../miniapp/index.html">Pay in-feed</a><a href="../fleet-executor/index.html">Executor</a><a href="../status/index.html">Status</a><a href="../security/index.html">Security</a><a href="../changelog/index.html">Changelog</a></nav>
+  </div>
+</div>
+</body>
+</html>

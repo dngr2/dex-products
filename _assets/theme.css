@@ -1,0 +1,35 @@
+/* theme.css — THE single source of truth for the fleet's design tokens.
+ *
+ * Injected as a <link> by chrome.py (see its theme_link()), so no page is hand-edited. Sits LAST in
+ * <head>, after each page's own inline <style>, and the selectors are html[data-theme=…] (specificity
+ * 0,1,1) which BEATS a page's bare `:root` (0,1,0) — so these tokens win regardless of order.
+ *
+ * Phase 1: purely additive/overriding — a page keeps its old inline `:root` as a harmless shadow.
+ * Phase 2 (later, optional): strip the now-dead inline literals from the sources.
+ *
+ * SCOPE: tokens only. The chrome's OWN selectors (.dx-*) stay in chrome.py; a page's layout stays in
+ * the page. One dark value, one light value, one file.
+ */
+
+/* fallback for any page that carries the sheet WITHOUT a data-theme (e.g. the landing) = canonical dark */
+:root {
+  --bg:#05080f; --fg:#e9eefb; --mut:#8fa0be; --card:#0b1222; --line:#18233a;
+  --btn:#4d94ff; --b:#4d94ff; --acc:#4d94ff; --ok:#2ea043; --warn:#d29922;
+  --bad:#f87171; --muted:#8fa0be; --chip:#111a2c;
+  --acc-line:rgba(77,148,255,.38); --acc-soft:rgba(77,148,255,.10);
+  --r:14px; --r-sm:10px;                 /* structural radii — theme-independent */
+}
+
+html[data-theme="dark"] {
+  --bg:#05080f; --fg:#e9eefb; --mut:#8fa0be; --card:#0b1222; --line:#18233a;
+  --btn:#4d94ff; --b:#4d94ff; --acc:#4d94ff; --ok:#2ea043; --warn:#d29922;
+  --bad:#f87171; --muted:#8fa0be; --chip:#111a2c;
+  --acc-line:rgba(77,148,255,.38); --acc-soft:rgba(77,148,255,.10);
+}
+
+html[data-theme="light"] {
+  --bg:#f8fafc; --fg:#0f172a; --mut:#64748b; --card:#ffffff; --line:#e2e8f0;
+  --btn:#1f6feb; --b:#1f6feb; --acc:#1f6feb; --ok:#1a7f37; --warn:#9a6700;
+  --bad:#b91c1c; --muted:#64748b; --chip:#f1f5f9;
+  --acc-line:rgba(31,111,235,.35); --acc-soft:rgba(31,111,235,.07);
+}

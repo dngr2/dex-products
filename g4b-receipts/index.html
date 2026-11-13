@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<!--
+  G4-b — RECEIPT NFTs. ONE static file, NO server, NO build, NO deps. Same idiom as the g2b page.
+
+  WHAT IT DOES: paste a g2b escrow address. The page reads the escrow AND the receipt contract live,
+  shows whether a receipt exists, and (if the escrow is SETTLED and not yet receipted) lets ANYONE
+  mint exactly one receipt to the payer. The receipt's metadata is rendered from the on-chain
+  tokenURI (base64 JSON) — no server, no IPFS.
+
+  HONESTY RULES THIS PAGE FOLLOWS:
+   1. A receipt proves an escrow SETTLED. `settled` is ONE bool set on BOTH release and refund, so
+      a receipt does NOT by itself prove release-vs-refund. Said out loud, per escrow.
+   2. PROVENANCE is explained, not implied: the mint gate is allowlist + factory codehash pin +
+      MEMBERSHIP in the factory's own escrowsOf(payer) — because every escrow getter is forgeable by
+      a lookalike stub (GOTCHAS #134/#135). The page re-checks membership live and says which check
+      would fail.
+   3. `amount` shown is the escrow's CREDITED amount (what arrived, FOT-safe), never the live balance
+      (a settled escrow holds 0 — showing balance would print 0).
+   4. Failed live reads render "unreachable", never a silent 0/false (GOTCHAS #112).
+
+  ROUTES (hash): #/?e=0x..  -> view one escrow's receipt state.
+  CONFIG via query: ?rpc=<url>  ?chain=base|base_sepolia  ?receipt=0x..
+-->
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>receipt — proof of a completed escrow</title>
+<style>
+  /* palette UNIFIED with the landing (dex-site/index.html) so the whole site reads as one system */
+  :root { --bg:#05080f; --fg:#e9eefb; --mut:#8fa0be; --card:#0b1222; --line:#18233a;
+          --acc:#4d94ff; --ok:#34d399; --warn:#fbbf24; --bad:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .wrap { max-width:760px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:18px; margin:0 0 4px; letter-spacing:.5px; }
+  .sub { color:var(--mut); font-size:13px; margin-bottom:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin:14px 0; }
+  label { display:block; color:var(--mut); font-size:12px; text-transform:uppercase;
+          letter-spacing:.6px; margin:14px 0 6px; }
+  input { width:100%; background:#0e1116; color:var(--fg); border:1px solid var(--line);
+          border-radius:8px; padding:10px 12px; font:inherit; }
+  input:focus { outline:none; border-color:var(--acc); }
+  button { background:var(--acc); color:#06131f; border:0; border-radius:8px; padding:11px 16px;
+           font:inherit; font-weight:700; cursor:pointer; margin-top:16px; }
+  button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:default; }
+  .big { font-size:30px; font-weight:700; margin:6px 0; }
+  .addr { overflow-wrap:anywhere; background:#0e1116; border:1px solid var(--line);
+          border-radius:8px; padding:12px; margin-top:6px; font-size:13px; }
+  .badge { display:inline-block; font-size:11px; padding:3px 8px; border-radius:999px;
+           border:1px solid var(--line); color:var(--mut); }
+  .badge.ok { color:var(--ok); border-color:var(--ok); }
+  .badge.warn { color:var(--warn); border-color:var(--warn); }
+  .badge.bad { color:var(--bad); border-color:var(--bad); }
+  .kv { display:grid; grid-template-columns:150px minmax(0,1fr); gap:6px 12px; font-size:13px; }
+  .kv .k { color:var(--mut); }
+  .err { color:var(--bad); } .pos { color:var(--ok); }
+  a { color:var(--acc); }
+  .mut { color:var(--mut); font-size:13px; }
+  hr { border:0; border-top:1px solid var(--line); margin:16px 0; }
+</style>
+<link rel="stylesheet" href="../_assets/theme.css">
+<link rel="icon" type="image/svg+xml" href="../_assets/favicon.svg">
+</head>
+<body>
+<!-- dx-chrome --><style>
+/* dx-chrome — shared, namespaced. Injected by chrome.py; do not hand-edit in built files. */
+.dx-top{position:relative;z-index:50;background:rgba(5,8,15,.72);backdrop-filter:blur(8px);border-bottom:1px solid #18233a}
+.dx-top-in{max-width:900px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px}
+.dx-home{display:inline-flex;align-items:center;gap:7px;font:600 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color:#e9eefb;text-decoration:none;padding:6px 2px}
+.dx-home:hover{color:#4d94ff}
+.dx-home .dx-arrow{color:#4d94ff}
+.dx-tag{font:500 12.5px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be;margin-left:auto}
+.dx-foot{position:relative;z-index:50;margin-top:56px;border-top:1px solid #18233a;background:rgba(5,8,15,.72)}
+.dx-foot-in{max-width:900px;margin:0 auto;padding:24px 20px 40px}
+.dx-foot-brand{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+.dx-foot-brand a{font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;text-decoration:none}
+.dx-foot-brand a:hover{color:#4d94ff}
+.dx-foot-brand span{font:500 12.5px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be}
+.dx-foot-nav{display:flex;gap:9px;flex-wrap:wrap}
+.dx-foot-nav a{font:600 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;
+  text-decoration:none;background:rgba(255,255,255,.04);border:1px solid #18233a;border-radius:999px;padding:7px 13px}
+.dx-foot-nav a:hover{border-color:#4d94ff;color:#4d94ff}
+@media(max-width:600px){.dx-tag{display:none}}
+</style>
+<div class="dx-top">
+  <div class="dx-top-in">
+    <a class="dx-home" href="../index.html"><span class="dx-arrow">←</span> DEX fleet</a>
+    <span class="dx-tag">non-custodial rails on Base</span>
+  </div>
+</div>
+<div class="wrap">
+  <h1>receipt — proof of a completed escrow</h1>
+  <div class="sub">one ERC-721 per settled escrow, minted to the payer ·
+    <span class="mut" id="chainbadge">…</span></div>
+  <div id="app">loading…</div>
+  <div class="card mut" id="gate"></div>
+</div>
+<script src="../_assets/lib.js"></script>
+<script>
+"use strict";
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+
+// =============================== config ==========================================================
+const PARAMS = new URLSearchParams(location.search);
+const CHAINS = {
+  base:          { id: 8453,  name: "Base",          rpc: "https://base-rpc.publicnode.com",
+                   receipt: "0xAE5951d25FEDD06aB7e124e91Dac3AC20f5e7cAF", factory: "0x4B05fA6aD0Ba0D0120Dce19Ce34dde6d1316C237" },
+  base_sepolia:  { id: 84532, name: "Base Sepolia",  rpc: "https://base-sepolia-rpc.publicnode.com",
+                   // Sepolia still carries the v1 factory (v2 redeploy was Base-only; the receipt
+                   // was never deployed on Sepolia — its Base-only address is left empty).
+                   // v1 is 0x8079… (LIVE-PROOF); the v2 0x4B05… has 0 bytes here and every read
+                   // against it returns bare "0x" (caught 2026-11-12).
+                   receipt: "", factory: "0x80793a7d35f735bc76BeAf22B1f413926818f410" },
+};
+const CHAIN_KEY = PARAMS.get("chain") || "base";
+const C = CHAINS[CHAIN_KEY] || CHAINS.base;
+const RPC = PARAMS.get("rpc") || C.rpc;
+const FACTORY = (PARAMS.get("factory") || C.factory || "").toLowerCase();
+// the receipt contract (set on deploy); empty => reads degrade to "no receipt contract"
+const RECEIPT = (PARAMS.get("receipt") || C.receipt || "").toLowerCase();
+
+// selectors — DERIVED values, pinned against `cast sig` in verify.mjs (GOTCHAS #5)
+const SEL = {
+  // receipt
+  mint: "0xa98aeecb",        // mintForEscrow(address)
+  tokenURI: "0xc87b56dd",    // tokenURI(uint256)
+  receiptOf: "0xc8fcfa24",   // receiptOf(address)
+  ownerOf: "0x6352211e",     // ownerOf(uint256)
+  totalMinted: "0xa2309ff8",
+  mintFeeWei: "0x06220534",
+  facts: "0xf167cada",       // facts(uint256)
+  factoryAllow: "0x35afe40e",// factoryAllow(address)
+  factoryCodehashOf: "0x404f1d83", // factoryCodehashOf(address)
+  // escrow
+  payer: "0x123119cd", counterparty: "0xc3df6546", token: "0xfc0c546a",
+  amount: "0xaa8c217c", settled: "0x8f775839", factoryOf: "0xc45a0155",
+  // factory (membership provenance)
+  escrowCount: "0xe9f39c8c", escrowsOf: "0x40064d48",
+};
+
+// =============================== rpc =============================================================
+async function rpc(method, params, tries = 4) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await _fetchT(RPC, { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error.message);
+      return j.result;
+    } catch (e) { last = e; if (i < tries - 1) await new Promise((s) => setTimeout(s, 300 * (i + 1))); }
+  }
+  throw last;
+}
+const ethCall = (to, data) => rpc("eth_call", [{ to, data }, "latest"]);
+const word = (h) => String(h).padStart(64, "0");
+const addr32 = (a) => word(a.toLowerCase().replace(/^0x/, ""));
+const pad32 = (v) => word(BigInt(v).toString(16));
+const isAddr = (a) => /^0x[0-9a-fA-F]{40}$/.test(a || "");
+const short = (a) => (a ? a.slice(0, 6) + "…" + a.slice(-4) : "");
+const hexToBig = (h) => BigInt(h && h !== "0x" ? h : "0x0");
+const readUint = async (to, sel) => hexToBig(await ethCall(to, sel));
+const readAddr = async (to, sel) => "0x" + (await ethCall(to, sel)).replace(/^0x/, "").slice(-40);
+const fmt = (n, d) => { const s = (Number(n) / 10 ** d).toFixed(Math.min(d, 6)).replace(/0+$/, "").replace(/\.$/, ""); return s === "" ? "0" : s; };
+
+// =============================== render ==========================================================
+const app = document.getElementById("app");
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function home() {
+  app.innerHTML = `
+    <div class="card">
+      <label>escrow address</label>
+      <input id="eaddr" placeholder="0x… a g2b escrow">
+      <button id="viewbtn">View receipt state</button>
+      <div class="mut" style="margin-top:10px">Works read-only with NO wallet. Minting needs one.</div>
+    </div>
+    <div class="card mut" id="hint">
+      · a receipt exists only for a SETTLED escrow; settled means released OR refunded, so the
+      metadata points at the escrow's log for which path fired.
+      ${RECEIPT ? "" : "· no receipt contract configured for " + esc(C.name) + " — pass ?receipt=0x…"}
+    </div>`;
+  document.getElementById("viewbtn").onclick = () => {
+    const a = document.getElementById("eaddr").value.trim();
+    if (isAddr(a)) location.hash = "#/?e=" + a;
+  };
+}
+
+async function viewEscrow(addr) {
+  app.innerHTML = `<div class="card">reading…</div>`;
+  let cid;
+  try { cid = await rpc("eth_chainId", []); } catch (e) { app.innerHTML = `<div class="card err">rpc: ${esc(e.message)}</div>`; return; }
+  document.getElementById("chainbadge").textContent = (cid === "0x" + C.id.toString(16)) ? C.name : "chain " + cid;
+
+  let payer, counterparty, token, amount, settled, factoryOf;
+  try {
+    [payer, counterparty, token] = await Promise.all([
+      readAddr(addr, SEL.payer), readAddr(addr, SEL.counterparty), readAddr(addr, SEL.token),
+    ]);
+    [amount, settled, factoryOf] = await Promise.all([
+      readUint(addr, SEL.amount), readUint(addr, SEL.settled), readAddr(addr, SEL.factoryOf),
+    ]);
+  } catch (e) { app.innerHTML = `<div class="card err">not an escrow? ${esc(e.message)}</div>`; return; }
+
+  const isSettled = settled === 1n;
+  const sym = token.toLowerCase() === "0x4200000000000000000000000000000000000006" ? "WETH" : short(token);
+
+  // provenance re-check (membership) — the honest part, done live
+  let member = null, memberNote = "";
+  try {
+    const n = await readUint(factoryOf, SEL.escrowCount + addr32(payer));
+    member = false;
+    for (let i = 0n; i < n; i++) {
+      const c = "0x" + (await ethCall(factoryOf, SEL.escrowsOf + addr32(payer) + pad32(i))).replace(/^0x/, "").slice(-40);
+      if (c.toLowerCase() === addr.toLowerCase()) { member = true; break; }
+    }
+  } catch { member = null; }
+  memberNote = member === true ? "member of the factory's own escrow list — provenance holds"
+    : member === false ? "<span class='err'>NOT in the factory's escrow list — a lookalike would be rejected</span>"
+    : "<span class='mut'>membership unreachable</span>";
+
+  // receipt state
+  let totalMinted = null, mintedId = null, tokenOwner = null, fee = null;
+  if (RECEIPT) {
+    try {
+      const [tm, mid, f] = await Promise.all([
+        readUint(RECEIPT, SEL.totalMinted),
+        readUint(RECEIPT, SEL.receiptOf + addr32(addr)),
+        readUint(RECEIPT, SEL.mintFeeWei),
+      ]);
+      totalMinted = tm; mintedId = mid; fee = f;
+      if (mid > 0n) tokenOwner = await readAddr(RECEIPT, SEL.ownerOf + pad32(mid)).catch(() => null);
+    } catch { /* leave nulls -> unreachable */ }
+  }
+
+  app.innerHTML = `
+    <h1>escrow ${esc(short(addr))}</h1>
+    <div class="sub">
+      <span class="badge ${isSettled ? "warn" : ""}">${isSettled ? "settled" : "locked"}</span>
+      <span class="badge ${member === true ? "ok" : member === false ? "bad" : ""}">provenance ${member === true ? "ok" : member === false ? "fail" : "?"}</span>
+      ${RECEIPT ? "" : `<span class="badge">no receipt contract</span>`}
+    </div>
+    <div class="card big">${esc(fmt(amount, 18))} ${esc(sym)}</div>
+    <div class="card">
+      <div class="kv">
+        <div class="k">escrow</div><div>${esc(addr)}</div>
+        <div class="k">payer (receipt goes here)</div><div>${esc(payer)}</div>
+        <div class="k">counterparty</div><div>${esc(counterparty)}</div>
+        <div class="k">factory</div><div>${esc(factoryOf)}</div>
+        <div class="k">membership</div><div>${memberNote}</div>
+      </div>
+      <hr>
+      <div class="mut">amount shown is the CREDITED amount (what arrived) — a settled escrow holds 0,
+        so the live balance would read 0.</div>
+    </div>
+    <div class="card" id="rcpt"></div>
+    <div class="mut" id="rcptout"></div>
+    <a href="#/">← another escrow</a>`;
+
+  const rcpt = document.getElementById("rcpt");
+  if (!RECEIPT) { rcpt.innerHTML = `<div class="mut">no receipt contract on this chain yet.</div>`; return; }
+  if (totalMinted === null) { rcpt.innerHTML = `<div class="mut">receipt contract unreachable</div>`; return; }
+
+  if (mintedId > 0n) {
+    rcpt.innerHTML = `<div class="row"><b>receipt #${esc(mintedId.toString())}</b></div>
+      <div class="mut">minted to ${esc(short(tokenOwner || payer))} — one per escrow, already done.</div>
+      <button class="ghost" id="uribtn">Show metadata (on-chain tokenURI)</button>
+      <pre class="addr" id="uriout" style="display:none;white-space:pre-wrap"></pre>`;
+    document.getElementById("uribtn").onclick = async () => {
+      const out = document.getElementById("uriout");
+      out.style.display = "block"; out.textContent = "reading…";
+      try {
+        const raw = await ethCall(RECEIPT, SEL.tokenURI + pad32(mintedId));
+        out.textContent = decodeTokenURI(raw);
+      } catch (e) { out.textContent = "tokenURI read failed: " + e.message; }
+    };
+    return;
+  }
+
+  // not minted
+  if (!isSettled) {
+    rcpt.innerHTML = `<div class="row"><b>no receipt yet</b></div>
+      <div class="mut">the escrow is not settled — a receipt only exists after release or refund.</div>`;
+    return;
+  }
+  rcpt.innerHTML = `<div class="row"><b>mint the receipt</b></div>
+    <div class="mut">settled and un-minted. ANYONE may mint it; it goes to the payer
+      (${esc(short(payer))}), not to the caller.${fee && fee > 0n ? " fee " + esc(fmt(fee, 18)) + " ETH" : " (no fee)"}</div>
+    <button id="mintbtn">Mint receipt</button>`;
+  document.getElementById("mintbtn").onclick = () => mintReceipt(addr, fee);
+}
+
+// decode the data:application/json;base64,<b64> tokenURI into readable JSON
+function decodeTokenURI(hexRet) {
+  const h = hexRet.replace(/^0x/, "");
+  const off = Number(BigInt("0x" + h.slice(0, 64))) * 2;
+  const len = Number(BigInt("0x" + h.slice(off, off + 64))) * 2;
+  const bytes = h.slice(off + 64, off + 64 + len);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 2) bin += String.fromCharCode(parseInt(bytes.slice(i, i + 2), 16));
+  let utf8;
+  try { utf8 = decodeURIComponent(escape(bin)); } catch { utf8 = bin; }
+  const p = utf8.indexOf("base64,");
+  if (p < 0) return utf8;
+  const b64 = utf8.slice(p + 7);
+  try {
+    const atob_ = globalThis.atob || ((b) => Buffer.from(b, "base64").toString("binary"));
+    const json = atob_(b64);
+    const j = JSON.parse(json);
+    return JSON.stringify(j, null, 2);
+  } catch { return utf8; }
+}
+
+async function mintReceipt(escrow, fee) {
+  const out = document.getElementById("rcptout");
+  if (!globalThis.ethereum) { out.innerHTML = "<span class='err'>no wallet (window.ethereum)</span>"; return; }
+  try {
+    const me = (await globalThis.ethereum.request({ method: "eth_requestAccounts" }))[0];
+    out.innerHTML = "<span class='mut'>submitting mint…</span>";
+    const tx = { from: me, to: RECEIPT, data: SEL.mint + addr32(escrow) };
+    if (fee && fee > 0n) tx.value = "0x" + fee.toString(16);
+    const h = await globalThis.ethereum.request({ method: "eth_sendTransaction", params: [tx] });
+    out.innerHTML = `<span class='mut'>submitted ${esc(short(h))} — waiting…</span>`;
+    for (let i = 0; i < 90; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const rc = await rpc("eth_getTransactionReceipt", [h]).catch(() => null);
+      if (rc && rc.blockNumber) {
+        out.innerHTML = BigInt(rc.status) === 1n
+          ? `<span class="pos">receipt minted — tx ${esc(short(h))}</span>`
+          : `<span class="err">mint reverted — ${esc(h)}</span>`;
+        return;
+      }
+    }
+    out.innerHTML = `<span class="mut">still pending: ${esc(h)}</span>`;
+  } catch (e) { out.innerHTML = `<span class="err">${esc(e.message || e)}</span>`; }
+}
+
+function route() {
+  const m = location.hash.match(/e=(0x[0-9a-fA-F]{40})/);
+  if (m) viewEscrow(m[1]); else home();
+}
+function boot() { if (FACTORY) document.getElementById("gate").textContent = "factory " + FACTORY; route(); }
+globalThis.boot = boot;
+globalThis.viewEscrow = viewEscrow;
+globalThis.decodeTokenURI = decodeTokenURI;
+globalThis.SEL = SEL;
+globalThis.CHAINS = CHAINS;
+globalThis.RECEIPT = RECEIPT;
+if (typeof window !== "undefined") globalThis.onhashchange = route;
+boot();
+</script>
+
+<div class="dx-foot">
+  <div class="dx-foot-in">
+    <div class="dx-foot-brand"><a href="../index.html">← DEX fleet</a>
+      <span>truth-only · every number read on-chain</span></div>
+    <nav class="dx-foot-nav" aria-label="All pages"><a href="../subscribe/index.html">Subscriptions</a><a href="../merchant/index.html">For merchants</a><a href="../g2b-escrow/index.html">Escrow</a><a href="../g2a-streams/index.html">Streams</a><a href="../f1a-payment-links/index.html">Payment links</a><a href="../p2-forwarder/index.html">Forwarder</a><a href="../p3-router/index.html">Swap router</a><a href="../g4b-receipts/index.html">Receipts</a><a href="../g3a-sponsorship/index.html">Gasless</a><a href="../f1c-duster/index.html">Dust → USDC</a><a href="../miniapp/index.html">Pay in-feed</a><a href="../fleet-executor/index.html">Executor</a><a href="../status/index.html">Status</a><a href="../security/index.html">Security</a><a href="../changelog/index.html">Changelog</a></nav>
+  </div>
+</div>
+<!-- dx-timelock:start -->
+<div class="dx-timelock" id="dxTimelock" style="display:none;max-width:720px;margin:14px auto 0;padding:9px 12px;border:1px solid var(--line,#2a3550);border-radius:8px;font-size:12.5px;color:var(--mut,#8fa0be)"></div>
+<script>
+"use strict";
+(function () {
+  var el = document.getElementById("dxTimelock"); if (!el) return;
+  var ADDR = "0x4B05fA6aD0Ba0D0120Dce19Ce34dde6d1316C237", BAKED = 172800, RPC = "https://base-rpc.publicnode.com";
+  var SEL = "0x7aadef8b";
+  function hum(s) { var d = s / 86400; return (d % 1 === 0) ? (d + " day" + (d > 1 ? "s" : "")) : Math.round(s / 3600) + "h"; }
+  function paint(sec, live) {
+    if (!sec) return;
+    el.innerHTML = "<b>a fee change is STAGED, not instant</b> — the owner's raise or recipient change "
+      + "waits <b>" + hum(sec) + "</b> (the contract's TIMELOCK) before it can be committed"
+      + (live ? " — read live on-chain" : " — TIMELOCK " + hum(BAKED) + " baked, RPC unreachable") + ".";
+    el.style.display = "";
+  }
+  paint(BAKED, false);
+  try {
+    var ac = new AbortController(); var to = setTimeout(function () { ac.abort(); }, 8000);
+    fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, signal: ac.signal,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: ADDR, data: SEL }, "latest"] }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (j && j.result) paint(parseInt(j.result.slice(-16), 16), true); })
+      .catch(function () {})
+      .finally(function () { clearTimeout(to); });
+  } catch (e) {}
+})();
+</script>
+<!-- dx-timelock:end -->
+</body>
+</html>

@@ -1,0 +1,333 @@
+<!doctype html>
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DEX pay — tap, pay USDC, receipt</title>
+
+<!-- ── Farcaster FRAME (legacy vNext) + Mini App embed. Static host: THIS page is the embed,
+     so the button just opens the interactive mini app (no post_url server needed). ──
+     URL SHAPE: app at https://dngr2.github.io/dex-products/miniapp/ ; manifest at the DOMAIN ROOT
+     https://dngr2.github.io/.well-known/farcaster.json (Farcaster reads the root only). ── -->
+<meta property="og:title" content="Pay in USDC">
+<meta property="og:description" content="One tap. Flat fee read live on-chain. Receipt in the thread.">
+<meta property="og:image" content="https://dngr2.github.io/dex-products/miniapp/_assets/og-card-ai.jpg">
+<meta name="fc:frame" content="vNext">
+<meta name="fc:frame:image" content="https://dngr2.github.io/dex-products/miniapp/_assets/og-card-ai.jpg">
+<meta name="fc:frame:image:aspect_ratio" content="1.91:1">
+<meta name="fc:frame:button:1" content="Open &amp; pay">
+<meta name="fc:frame:button:1:action" content="link">
+<meta name="fc:frame:button:1:target" content="https://dngr2.github.io/dex-products/miniapp/">
+<!-- Mini App (new spec) embed -->
+<meta name="fc:miniapp" content='{"version":"1","imageUrl":"https://dngr2.github.io/dex-products/miniapp/_assets/og-card-ai.jpg","button":{"title":"Open & pay","action":{"type":"launch_miniapp","url":"https://dngr2.github.io/dex-products/miniapp/","name":"DEX pay","splashImageUrl":"https://dngr2.github.io/dex-products/miniapp/_assets/splash-200.png","splashBackgroundColor":"#1f6feb"}}}'>
+<meta name="fc:miniapp:image" content="https://dngr2.github.io/dex-products/miniapp/_assets/og-card-ai.jpg">
+
+<link rel="icon" href="_assets/icon-1024.png">
+<style>
+  :root{--b:#1f6feb;--bg:#0b0f17;--card:#141a24;--mut:#8b98a9;--ok:#2ea043;--warn:#d29922;--line:#232c3a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:#e8eef7;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:520px;margin:0 auto;padding:20px 16px 64px}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--mut);margin-bottom:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin:12px 0}
+  .row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:0}
+  .k{color:var(--mut)}
+  .v{font-variant-numeric:tabular-nums;text-align:right;word-break:break-all}
+  input,select{width:100%;background:#0e131c;color:#e8eef7;border:1px solid var(--line);border-radius:10px;padding:11px;font:inherit;margin:6px 0}
+  label{font-size:12px;color:var(--mut);display:block;margin-top:8px}
+  button{width:100%;background:var(--b);color:#fff;border:0;border-radius:12px;padding:14px;font:inherit;font-weight:600;margin-top:12px;cursor:pointer}
+  button.sec{background:#0e131c;border:1px solid var(--line);color:#cbd5e1;font-weight:500}
+  button:disabled{opacity:.5;cursor:default}
+  .pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid var(--line);color:var(--mut)}
+  .pill.ok{color:var(--ok);border-color:#1c3a24}.pill.warn{color:var(--warn);border-color:#3a3210}
+  a{color:#79b8ff}
+  code{background:#0e131c;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:12px}
+  .mut{color:var(--mut);font-size:12px}
+  .big{font-size:26px;font-weight:700}
+  .hide{display:none}
+  .center{text-align:center}
+</style>
+<link rel="stylesheet" href="../_assets/theme.css">
+
+</head>
+<body>
+<!-- dx-chrome --><style>
+/* dx-chrome — shared, namespaced. Injected by chrome.py; do not hand-edit in built files. */
+.dx-top{position:relative;z-index:50;background:rgba(5,8,15,.72);backdrop-filter:blur(8px);border-bottom:1px solid #18233a}
+.dx-top-in{max-width:900px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px}
+.dx-home{display:inline-flex;align-items:center;gap:7px;font:600 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color:#e9eefb;text-decoration:none;padding:6px 2px}
+.dx-home:hover{color:#4d94ff}
+.dx-home .dx-arrow{color:#4d94ff}
+.dx-tag{font:500 12.5px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be;margin-left:auto}
+.dx-foot{position:relative;z-index:50;margin-top:56px;border-top:1px solid #18233a;background:rgba(5,8,15,.72)}
+.dx-foot-in{max-width:900px;margin:0 auto;padding:24px 20px 40px}
+.dx-foot-brand{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+.dx-foot-brand a{font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;text-decoration:none}
+.dx-foot-brand a:hover{color:#4d94ff}
+.dx-foot-brand span{font:500 12.5px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be}
+.dx-foot-nav{display:flex;gap:9px;flex-wrap:wrap}
+.dx-foot-nav a{font:600 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;
+  text-decoration:none;background:rgba(255,255,255,.04);border:1px solid #18233a;border-radius:999px;padding:7px 13px}
+.dx-foot-nav a:hover{border-color:#4d94ff;color:#4d94ff}
+@media(max-width:600px){.dx-tag{display:none}}
+</style>
+<div class="dx-top">
+  <div class="dx-top-in">
+    <a class="dx-home" href="../index.html"><span class="dx-arrow">←</span> DEX fleet</a>
+    <span class="dx-tag">non-custodial rails on Base</span>
+  </div>
+</div>
+<div class="wrap">
+  <h1>DEX pay</h1>
+  <div class="sub">Tap, pay USDC, receipt. One link, no account. <span id="net" class="pill">reading chain…</span></div>
+  <div id="app"></div>
+  <div class="mut center" style="margin-top:22px">
+    fee <span id="fee">…</span> · registry <a id="reglink" target="_blank" rel="noopener">…</a> · <span id="stat"></span>
+  </div>
+</div>
+
+<script src="../_assets/lib.js"></script>
+<script>
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// DEX pay — a Farcaster Frame / Base Mini App pay link on the LIVE P2 Registry.
+//
+// HONESTY LINE (matters, and is on the page):
+//   • Registry + feeBps are READ LIVE from Base. The fee has already moved (25→100→500), so a
+//     hardcoded number would silently date — we never hardcode it.
+//   • The DEPOSIT ADDRESS is DERIVED, not trusted from the URL: we call the live contract's own
+//     predict(owner,dest) view. A link that carries a deposit addr is cross-checked against it, and
+//     a mismatch is shown, never hidden. (Why the contract's predict and not our own CREATE2 hash:
+//     the LIVE registry embeds an older, differently-compiled Forwarder creationCode than today's
+//     src/ builds — 2124 vs 2346 bytes — so an offline recompute from local artifacts is stale.
+//     The contract's own view is the only authority. Verified this session.)
+//   • The PAY LEG is real: an ERC-20 transfer of USDC to the deposit address on Base mainnet.
+//
+// NOTHING HERE BROADCASTS except the payer's own tap. Reads are eth_call.
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+
+const REGISTRY = "0x417c41d406c61E09958032Cd77338fc1F1ac7D45"; // LIVE Base mainnet P2 Registry (4654 B, 2 RPCs)
+const USDC = { 8453: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", 84532: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" };
+// ENDPOINT-POLICY: publicnode first (base.org is 25 req/s soft-limited, 429s -32007 under fan-out).
+const RPCS = ["https://base-rpc.publicnode.com", "https://base.drpc.org"];
+const P = new URLSearchParams(location.search);
+let CHAIN = 8453;
+
+// selectors (keccak-derived; verify.mjs re-derives and compares to cast)
+const SEL = {
+  predict:   "0x5c911b29", // predict(address,address)
+  feeBps:    "0x24a9d853", // feeBps()
+  minFee:    "0x24ec7590", // minFee()
+  transfer:  "0xa9059cbb", // transfer(address,uint256)
+  balanceOf: "0x70a08231", // balanceOf(address)
+  decimals:  "0x313ce567", // decimals()
+};
+const isAddr = (a) => /^0x[0-9a-fA-F]{40}$/.test(a || "");
+const ZERO = "0x0000000000000000000000000000000000000000";
+const short = (a) => a ? a.slice(0, 6) + "…" + a.slice(-4) : "";
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pad32 = (v) => BigInt(v).toString(16).padStart(64, "0");
+const addr32 = (a) => a.toLowerCase().replace(/^0x/, "").padStart(64, "0");
+const app = document.getElementById("app");
+const $ = (h) => { app.innerHTML = h; };
+const fmt = (n, d) => (Number(n) / 10 ** d).toFixed(d).replace(/0+$/, "").replace(/\.$/, "") || "0";
+
+let ACTIVE_RPC = RPCS[0];
+async function rpc(method, params) {
+  let last;
+  for (const url of RPCS) {
+    try {
+      const r = await _fetchT(url, { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+      const j = await r.json();
+      if (j.error) { last = new Error(j.error.message); continue; }
+      ACTIVE_RPC = url; return j.result;
+    } catch (e) { last = e; }
+  }
+  throw last || new Error("rpc unreachable");
+}
+const call = (to, data) => rpc("eth_call", [{ to, data }, "latest"]);
+const dec = (ret) => BigInt(ret === "0x" || !ret ? "0x0" : ret);  // uint256 return, robust to empty
+
+async function chainId() {
+  CHAIN = Number(dec(await rpc("eth_chainId", [])));
+  const c = document.getElementById("net");
+  c.textContent = { 8453: "Base", 84532: "Base Sepolia" }[CHAIN] || ("chain " + CHAIN);
+  c.className = "pill " + (CHAIN === 8453 ? "ok" : "warn");
+}
+async function liveFeeBps() { try { return Number(dec(await call(REGISTRY, SEL.feeBps))); } catch { return null; } }
+async function liveMinFee() { try { return dec(await call(REGISTRY, SEL.minFee)); } catch { return null; } }
+async function predict(owner, dest) {
+  const r = await call(REGISTRY, SEL.predict + addr32(owner) + addr32(dest));
+  return "0x" + r.slice(-40);
+}
+const usdc = () => USDC[CHAIN] || USDC[8453];
+
+// ── views ───────────────────────────────────────────────────────────────────────────────────────
+function home() {
+  $(`
+    <div class="card">
+      <div class="mut">Paste a pay link, or make one.</div>
+      <label>pay link</label>
+      <input id="link" placeholder="https://…/miniapp/?dest=0x…&amount=2" autocomplete="off">
+      <button id="open">Open link</button>
+    </div>
+    <div class="card">
+      <div class="mut">Make a pay link — get paid in USDC.</div>
+      <label>your payout address (destination)</label>
+      <input id="dest" placeholder="0x… where funds land" autocomplete="off">
+      <label>amount (USDC)</label>
+      <input id="amt" placeholder="2" inputmode="decimal" autocomplete="off">
+      <label>memo (optional)</label>
+      <input id="memo" placeholder="what is this for" autocomplete="off">
+      <button id="make">Make link</button>
+      <div class="mut" id="mkmsg" style="margin-top:8px"></div>
+    </div>
+  `);
+  document.getElementById("open").onclick = () => {
+    const v = document.getElementById("link").value.trim();
+    if (!v) return;
+    try { const u = new URL(v, location.href); location.search = u.search; } catch { location.href = v; }
+  };
+  document.getElementById("make").onclick = makeLink;
+}
+
+async function makeLink() {
+  const msg = document.getElementById("mkmsg");
+  const dest = document.getElementById("dest").value.trim();
+  const amt = document.getElementById("amt").value.trim();
+  const memo = document.getElementById("memo").value.trim();
+  if (!isAddr(dest) || /^0x0{40}$/.test(dest)) { msg.innerHTML = `<span class="pill warn">need a valid destination</span>`; return; }
+  if (!(Number(amt) > 0)) { msg.innerHTML = `<span class="pill warn">need an amount</span>`; return; }
+  msg.textContent = "deriving deposit address from the live registry…";
+  // owner = the maker's address if we have a wallet, else a deterministic placeholder is wrong —
+  // require a wallet so predict(owner,..) matches what register() will deploy for them.
+  let owner = ZERO;
+  try { const p = await provider(); if (p) { const ac = await p.request({ method: "eth_requestAccounts" }); owner = ac[0]; } } catch {}
+  let dep;
+  try { dep = await predict(owner, dest); } catch { msg.innerHTML = `<span class="pill warn">registry unreachable</span>`; return; }
+  const usp = new URLSearchParams({ owner, dest, amount: amt });
+  if (memo) usp.set("memo", memo);
+  const link = location.origin + location.pathname + "?" + usp.toString();
+  msg.innerHTML = `
+    <div class="mut">deposit address (from registry.predict):</div>
+    <div class="v" style="text-align:left;margin:4px 0">${esc(dep)}</div>
+    <div class="mut">${owner === ZERO ? "no wallet connected — deposit address is for owner 0x0; connect to pin yours" : "pinned to your address"}</div>
+    <div class="row"><span class="k">link</span></div>
+    <div class="v" style="text-align:left;font-size:12px">${esc(link)}</div>
+    <button class="sec" id="cp">Copy link</button>
+    <button id="go">Open it</button>`;
+  document.getElementById("cp").onclick = () => navigator.clipboard.writeText(link).then(() => document.getElementById("cp").textContent = "Copied");
+  document.getElementById("go").onclick = () => { location.search = usp.toString(); };
+}
+
+async function payView() {
+  const dest = (P.get("dest") || "").trim();
+  const amount = (P.get("amount") || "").trim();
+  const memo = P.get("memo") || "";
+  const owner = (P.get("owner") || ZERO).trim();
+  const depPinned = (P.get("deposit") || "").trim();
+
+  if (!isAddr(dest) || !(Number(amount) > 0)) {
+    home(); return;
+  }
+  const dec6 = 6; // USDC
+  const amtWei = BigInt(Math.round(Number(amount) * 10 ** dec6));
+
+  let dep = depPinned, fee = null, verified = null;
+  try {
+    fee = await liveFeeBps();
+    const derived = await predict(owner, dest);
+    if (!dep) dep = derived;
+    verified = isAddr(dep) && dep.toLowerCase() === derived.toLowerCase();
+  } catch {}
+
+  $(`
+    <div class="card center">
+      <div class="mut">pay</div>
+      <div class="big">${esc(amount)} USDC</div>
+      ${memo ? `<div class="mut">“${esc(memo)}”</div>` : ""}
+    </div>
+    <div class="card">
+      <div class="row"><span class="k">to (destination)</span><span class="v">${esc(short(dest))}</span></div>
+      <div class="row"><span class="k">via deposit</span><span class="v">${esc(short(dep))}</span></div>
+      <div class="row"><span class="k">fee</span><span class="v">${fee == null ? "…" : fmt(fee, 2) + "% (live)"}</span></div>
+      <div class="row"><span class="k">derivation</span><span class="v">${verified === true ? '<span class="pill ok">matches registry.predict</span>' : verified === false ? '<span class="pill warn">MISMATCH vs registry.predict</span>' : "…"}</span></div>
+      <div class="row"><span class="k">network</span><span class="v">${CHAIN === 8453 ? "Base" : "chain " + CHAIN}</span></div>
+    </div>
+    <button id="pay">Pay ${esc(amount)} USDC</button>
+    <div class="mut center" id="msg" style="margin-top:8px"></div>
+  `);
+  document.getElementById("pay").onclick = () => doPay(dep, amtWei);
+}
+
+async function doPay(dep, amtWei) {
+  const msg = document.getElementById("msg");
+  const btn = document.getElementById("pay");
+  try {
+    const p = await provider();
+    if (!p) { msg.innerHTML = `<span class="pill warn">no wallet — open in a Farcaster/Base wallet</span>`; return; }
+    const ac = await p.request({ method: "eth_requestAccounts" });
+    const from = ac[0];
+    const wid = Number(BigInt(await p.request({ method: "eth_chainId" })));
+    if (wid !== CHAIN) {
+      msg.textContent = `switching to chain ${CHAIN}…`;
+      try { await p.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x" + CHAIN.toString(16) }] }); }
+      catch { msg.innerHTML = `<span class="pill warn">add/switch network ${CHAIN}</span>`; return; }
+    }
+    btn.disabled = true; msg.textContent = "confirm in wallet…";
+    const data = SEL.transfer + addr32(dep) + pad32(amtWei);
+    const tx = await p.request({ method: "eth_sendTransaction",
+      params: [{ from, to: usdc(), data, value: "0x0" }] });
+    msg.innerHTML = `sent <a href="https://basescan.org/tx/${tx}" target="_blank" rel="noopener">${short(tx)}</a> — receipt in the thread`;
+    btn.textContent = "Paid";
+  } catch (e) {
+    msg.innerHTML = `<span class="pill warn">${esc(e.message || "failed")}</span>`;
+    btn.disabled = false;
+  }
+}
+
+// EIP-1193 provider: Farcaster miniapp SDK first, then injected.
+async function provider() {
+  try {
+    if (window.__fc) return window.__fc;
+    if (window.ethereum) return window.ethereum;
+    const sdk = await import("https://esm.sh/@farcaster/miniapp-sdk@0.1.0");
+    const s = sdk.sdk || sdk.default;
+    if (s) { const p = await s.wallet.getEthereumProvider(); if (p) { window.__fc = p; return p; } }
+  } catch {}
+  return window.ethereum || null;
+}
+
+// ── boot ────────────────────────────────────────────────────────────────────────────────────────
+(async () => {
+  document.getElementById("reglink").href = `https://basescan.org/address/${REGISTRY}`;
+  document.getElementById("reglink").textContent = short(REGISTRY);
+  try { await chainId(); } catch {}
+  try { const f = await liveFeeBps(); document.getElementById("fee").textContent = f == null ? "…" : fmt(f, 2) + "%"; } catch {}
+  document.getElementById("stat").textContent = "reads live · nothing broadcast";
+  // Farcaster: signal the frame is ready (new SDK). Best-effort — never fatal.
+  try {
+    const sdk = await import("https://esm.sh/@farcaster/miniapp-sdk@0.1.0");
+    (sdk.sdk || sdk.default)?.actions?.ready?.();
+  } catch {}
+  if (P.get("dest")) payView(); else home();
+})();
+</script>
+
+<div class="dx-foot">
+  <div class="dx-foot-in">
+    <div class="dx-foot-brand"><a href="../index.html">← DEX fleet</a>
+      <span>truth-only · every number read on-chain</span></div>
+    <nav class="dx-foot-nav" aria-label="All pages"><a href="../subscribe/index.html">Subscriptions</a><a href="../merchant/index.html">For merchants</a><a href="../g2b-escrow/index.html">Escrow</a><a href="../g2a-streams/index.html">Streams</a><a href="../f1a-payment-links/index.html">Payment links</a><a href="../p2-forwarder/index.html">Forwarder</a><a href="../p3-router/index.html">Swap router</a><a href="../g4b-receipts/index.html">Receipts</a><a href="../g3a-sponsorship/index.html">Gasless</a><a href="../f1c-duster/index.html">Dust → USDC</a><a href="../miniapp/index.html">Pay in-feed</a><a href="../fleet-executor/index.html">Executor</a><a href="../status/index.html">Status</a><a href="../security/index.html">Security</a><a href="../changelog/index.html">Changelog</a></nav>
+  </div>
+</div>
+</body>
+</html>

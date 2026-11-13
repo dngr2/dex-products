@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<!--
+  G2-a — payment streams. ONE static file, NO server, NO build step, NO third-party deps.
+  Hand-rolled ABI encode/decode over raw eth_call, matching the lane's style (see p3-router/frontend,
+  g2b-escrow/frontend, f1c-duster/frontend, p2-forwarder/frontend — the same convention).
+
+  WHAT IT DOES: a stream is a tiny vault that drips a token to a recipient over a fixed window. The
+  vault is CREATE2-minted by the factory, so no per-stream key is ever needed and the address is
+  PREDICTABLE before the tx. The recipient pulls whatever has vested, PERMISSIONLESSLY — the caller
+  pays the gas, the recipient gets the money.
+
+  THE WHOLE POINT OF THIS PAGE: prove the Base factory is the REAL factory, not a same-string
+  impostor, and prove the withdraw path is really permissionless.
+    1. The factory is proved by RUNTIME IDENTITY — keccak(runtime code) must equal the recorded
+       artefact hash 0xa4798afc… (GOTCHA #95). The page fetches the code and hashes it itself.
+    2. The same-string Sepolia factory 0x83303e59… on Base is shown FAILING the same proof: 594 B
+       (not 16,643), and streamCount() REVERTS instead of answering (the live #95 pair from the
+       record). An impostor must render 'wrong', never 'ok'.
+    3. The permissionless-withdraw claim is asserted from the vault CODE: the recipient is an
+       immutable read off the vault, and `withdraw()` takes NO arguments — so the payee cannot
+       depend on the caller. The page says this in words AND wires a real button.
+
+  HONESTY RULES THIS PAGE FOLLOWS:
+   1. The FEE is read LIVE off the factory's own feeBps() — never typed. The rate has been re-rated
+      25 -> 100 -> 500 bps (owner-settable); the page shows whatever the chain says today, and mirrors
+      the contract's own arithmetic floor(w * feeBps / 10_000) so a reader can reproduce a payout by hand.
+   2. An unreadable chain is its OWN state. A dead RPC renders "unreachable", NEVER a silent 0 or a
+      false "ok" (GOTCHAS #27/#112/#147) — the probe failed the row, it did not zero it.
+   3. Cancel is CANCEL-AWARE: post-cancel withdrawable() is 0 even though streamedAt() keeps
+      rising. The page reads `canceled` and renders that plainly rather than showing a phantom.
+   4. Read-only: the whole page works with NO wallet. Broadcast buttons use `window.ethereum` if
+      present, and say so honestly if it is not.
+
+  ROUTE: hash-routed so file:// works.  #/  -> factory proof + live stream   #/vault=<addr> -> a vault
+  CONFIG via query: ?rpc=<url> overrides the RPC.
+-->
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>G2-a streams — vesting payments, proved against the chain</title>
+<style>
+  /* palette UNIFIED with the landing (dex-site/index.html) so the whole site reads as one system */
+  :root { --bg:#05080f; --fg:#e9eefb; --mut:#8fa0be; --card:#0b1222; --line:#18233a;
+          --acc:#4d94ff; --ok:#34d399; --warn:#fbbf24; --bad:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .wrap { max-width:840px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:22px; margin:0 0 6px; }
+  h2 { font-size:13px; color:var(--mut); text-transform:uppercase; letter-spacing:.8px;
+       margin:30px 0 10px; font-weight:600; }
+  .sub { color:var(--mut); font-size:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin:14px 0; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .mut { color:var(--mut); font-size:13px; }
+  code { color:var(--fg); background:#0e1116; border:1px solid var(--line); border-radius:5px; padding:1px 5px; }
+  input, select { background:#0e1116; color:var(--fg); border:1px solid var(--line);
+                  border-radius:8px; padding:10px 12px; font:inherit;
+                  /* size="44" is an intrinsic width (~352px) that ignores the grid cell it sits in;
+                     border-box+100% makes the field track the cell instead of scrolling inside it. */
+                  box-sizing:border-box; width:100%; min-width:0; }
+  button { background:var(--acc); color:#06131f; border:0; border-radius:8px; padding:11px 16px;
+           font:inherit; font-weight:700; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  .addr { overflow-wrap:anywhere; background:#0e1116; border:1px solid var(--line);
+          border-radius:8px; padding:12px; margin-top:6px; font-size:13px; }
+  .badge { display:inline-block; font-size:11px; padding:3px 8px; border-radius:999px;
+           border:1px solid var(--line); color:var(--mut); }
+  .badge.ok { color:var(--ok); border-color:#1d4d38; }
+  .badge.warn { color:var(--warn); border-color:#54401a; }
+  .badge.bad { color:var(--bad); border-color:#55272c; }
+  .kv { display:grid; grid-template-columns:150px minmax(0,1fr); gap:6px 14px; font-size:13px; }
+  .kv .k { color:var(--mut); }
+  /* the value cell is a grid ITEM: min-width:auto makes it refuse to shrink below a 42-char address and
+     the track — and the page — runs past a phone viewport. min-width:0 + anywhere lets it wrap.
+     (Same P1-2 class as the g3a .kv and the g2a ops timeline.) */
+  .kv > div { min-width:0; overflow-wrap:anywhere; }
+  .big { font-size:26px; font-weight:700; margin:6px 0; }
+  table { width:100%; border-collapse:collapse; font-size:13px; margin-top:8px; }
+  th { color:var(--mut); font-size:11px; text-transform:uppercase; letter-spacing:.5px;
+       text-align:left; padding:6px; border-bottom:1px solid var(--line); }
+  td { padding:7px 6px; border-bottom:1px solid #191d24; overflow-wrap:anywhere; }
+  pre { background:#0e1116; border:1px solid var(--line); border-radius:8px; padding:12px;
+        overflow-x:auto; font-size:12px; margin:8px 0 0; }
+  a { color:var(--acc); text-decoration:none; }
+  footer { color:var(--mut); font-size:12px; margin-top:36px; border-top:1px solid var(--line);
+           padding-top:14px; }
+  .bar { height:10px; background:#0e1116; border:1px solid var(--line); border-radius:999px; overflow:hidden; margin:8px 0; }
+  .bar > i { display:block; height:100%; background:var(--acc); }
+</style>
+<link rel="stylesheet" href="../_assets/theme.css">
+<link rel="icon" type="image/svg+xml" href="../_assets/favicon.svg">
+</head>
+<body>
+<!-- dx-chrome --><style>
+/* dx-chrome — shared, namespaced. Injected by chrome.py; do not hand-edit in built files. */
+.dx-top{position:relative;z-index:50;background:rgba(5,8,15,.72);backdrop-filter:blur(8px);border-bottom:1px solid #18233a}
+.dx-top-in{max-width:900px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px}
+.dx-home{display:inline-flex;align-items:center;gap:7px;font:600 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color:#e9eefb;text-decoration:none;padding:6px 2px}
+.dx-home:hover{color:#4d94ff}
+.dx-home .dx-arrow{color:#4d94ff}
+.dx-tag{font:500 12.5px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be;margin-left:auto}
+.dx-foot{position:relative;z-index:50;margin-top:56px;border-top:1px solid #18233a;background:rgba(5,8,15,.72)}
+.dx-foot-in{max-width:900px;margin:0 auto;padding:24px 20px 40px}
+.dx-foot-brand{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+.dx-foot-brand a{font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;text-decoration:none}
+.dx-foot-brand a:hover{color:#4d94ff}
+.dx-foot-brand span{font:500 12.5px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be}
+.dx-foot-nav{display:flex;gap:9px;flex-wrap:wrap}
+.dx-foot-nav a{font:600 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;
+  text-decoration:none;background:rgba(255,255,255,.04);border:1px solid #18233a;border-radius:999px;padding:7px 13px}
+.dx-foot-nav a:hover{border-color:#4d94ff;color:#4d94ff}
+@media(max-width:600px){.dx-tag{display:none}}
+</style>
+<div class="dx-top">
+  <div class="dx-top-in">
+    <a class="dx-home" href="../index.html"><span class="dx-arrow">←</span> DEX fleet</a>
+    <span class="dx-tag">non-custodial rails on Base</span>
+  </div>
+</div>
+<div class="wrap"><div id="app">reading chain…</div></div>
+
+<script src="../_assets/lib.js"></script>
+<script>
+"use strict";
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+
+// =============================== config =========================================================
+const PARAMS = new URLSearchParams(location.search);
+const RPC = PARAMS.get("rpc") || "https://base-rpc.publicnode.com";
+// alternate endpoints for the boot gate below (same ENDPOINT-POLICY order as _FALLBACK)
+const RPC_ALTS = ["https://base.drpc.org", "https://mainnet.base.org"];
+const CHAIN_ID = 8453;
+const EXPLORER = "https://basescan.org";
+
+// Facts COPIED from products/g2a-streams/KEY-RECORD.md — never retyped (GOTCHA #73). verify.mjs
+// diffs each literal below against that file.
+const FACTORY = "0x3882A049ee99B96Ea68DF317713ed76008b9A075";       // v2.1 StreamFactory (Base), V21-DEAD-DROP-FIX-EVIDENCE
+const ARTEFACT_KECCAK = "0xa4798afcb277754b4bc6232981f29bb569a84d0801f455ff0a8ab79e2b3a6761";
+const ARTEFACT_BYTES = 16643;                                       // KEY-RECORD: verified v2.1 code 16,643 bytes
+// The smoke vault below was minted by the ORIGINAL throwaway factory (v1), whose immutable factory() is
+// v1 forever — a repoint cannot move a CREATE2-minted vault's producer. So a vault of "this lineage" may
+// name a known-historic PRODUCER (v1/v2), never only the current address. Both listed producers are
+// PAUSED and neither is the live one; v1 is FIRST because it is the only one that actually minted a
+// vault (streamCount(payer)=1; v2 and the relaunch factory both read 0), so `vintageOf`'s index-0 label
+// — the v1 one — is the one the live vault gets. Runtime byte lengths prove they are NOT copies of the
+// current factory (v1 9,385 B · v2 15,479 B vs FACTORY's 16,643 B, all keccaks differ).
+const FACTORY_HISTORIC = [
+  "0x2bB5b763a8A85e446909674177e65cb6F1052b4F",   // v1 — the smoke vault's producer (frozen, PAUSED)
+  "0x14bBd99B840a0Bf087b21A31e27BA83B45f958a0",   // v2 — superseded, PAUSED (minted nothing live)
+];
+const TREASURY = "0x5c0fc0917260A0656D253f1625053e3E6Dd2Ef3c";     // KEY-RECORD: OWNER=FEE_RECIPIENT
+const PAYER = "0x85C6764D55D647663E19465FdE80DF58638BbeD6";        // KEY-RECORD: deployer / this key
+const VAULT_LIVE = "0xB599140D0F49eF4d363CD3C409e57bDE9FE3ed7F";   // the smoke stream, read live below
+// The permissionless pull's PROOF, copied from KEY-RECORD (LIVE SMOKE — Base mainnet section).
+const WITHDRAW_TX = "0xe971b89b5a652180036c07e06d6da6ccdf3248dcdaeb3fb282040e2217194c64"; // Withdrawn, status 1
+const CALLER_THIRD_KEY = "0xDB6A5eAfFA293CB27Ee7e67869e71048e09e6d92";  // sent the tx, ≠ recipient
+// THE TRAP (GOTCHA #95): the Sepolia factory string, which on Base is a 594-byte DIFFERENT contract.
+const IMPOSTOR = "0x83303e59d4F9798C3B49f9D4C6E522FfeC05f2A5";
+const IMPOSTOR_BYTES = 594;
+
+// =============================== codec ==========================================================
+const word = (h) => String(h).padStart(64, "0");
+const pad32 = (v) => word(BigInt(v).toString(16));
+const addr32 = (a) => word(a.toLowerCase().replace(/^0x/, ""));
+const isAddr = (a) => /^0x[0-9a-fA-F]{40}$/.test(a || "");
+const isBytes32 = (a) => /^0x[0-9a-fA-F]{64}$/.test(a || "");
+const short = (a) => (a ? a.slice(0, 10) + "…" + a.slice(-8) : "");
+const hexToBig = (h) => BigInt(h && h !== "0x" ? h : "0x0");
+const addrOf = (h) => "0x" + String(h).slice(-40);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const fmt18 = (n) => { const s = (Number(n) / 1e18).toFixed(9).replace(/0+$/, "").replace(/\.$/, ""); return s === "" ? "0" : s; };
+
+// ---- keccak256 (Ethereum) in pure JS — same implementation p3 proved against `cast keccak` -------
+
+const utf8Hex = (s) => bytesToHex(new TextEncoder().encode(s));
+const sig = (s) => keccak256(utf8Hex(s)).slice(0, 10);   // DERIVED, never typed
+
+// EVERY selector below is DERIVED. verify.mjs asserts each == `cast sig <the same signature>`, so a
+// signature typo cannot hide behind a plausible-looking literal.
+const SEL = {
+  feeBps:        sig("feeBps()"),
+  feeRecipient:  sig("feeRecipient()"),
+  owner:         sig("owner()"),
+  paused:        sig("paused()"),
+  MIN_DURATION:  sig("MIN_DURATION()"),
+  MAX_FEE_BPS:   sig("MAX_FEE_BPS()"),
+  streamCount:   sig("streamCount(address)"),
+  streamsOf:     sig("streamsOf(address,uint256)"),
+  predict:       sig("predict(address,address,address,uint256,uint64,uint64)"),
+  createStream:  sig("createStream(address,address,uint256,uint64,uint64)"),
+  // vault
+  state:         sig("state()"),
+  streamedAt:    sig("streamedAt(uint256)"),
+  withdrawable:  sig("withdrawable()"),
+  withdraw:      sig("withdraw()"),
+  forward:       sig("forward(address,address)"),
+  cancel:        sig("cancel()"),
+  recipient:     sig("recipient()"),
+  payer:         sig("payer()"),
+  token:         sig("token()"),
+  amount:        sig("amount()"),
+  start:         sig("start()"),
+  end:           sig("end()"),
+  duration:      sig("duration()"),
+  canceled:      sig("canceled()"),
+  withdrawn:     sig("withdrawn()"),
+  factory:       sig("factory()"),
+};
+// FALSIFIABLE, reproduce by hand:
+//   cast sig "withdraw()"          -> 0x3ccfd60b   (NO ARGS — the payee cannot depend on the caller)
+//   cast sig "forward(address,address)" -> 0x95ccf8bf  (the daemon's byte-exact calldata shape)
+//   cast sig "state()"             -> 0xc19d93fb
+// The vault exposes BOTH withdraw() and forward(address,address); both hit _pull(). The page uses the
+// zero-arg one because its "permissionless" claim is cleanest when the calldata carries no caller
+// data at all. verify.mjs asserts SEL.withdraw == cast sig and that the live code CONTAINS it.
+
+// the fee, mirroring the contract EXACTLY: floor(w * bps / 10_000), taken from the PULLED amount.
+const applyFee = (w, bps) => { const fee = (BigInt(w) * BigInt(bps)) / 10000n; return { fee, recipientOut: BigInt(w) - fee }; };
+
+function encodeCreateStream(recipient, token, amount, start, end) {
+  return SEL.createStream + addr32(recipient) + addr32(token) + pad32(amount) + pad32(start) + pad32(end);
+}
+function encodePredict(payer, recipient, token, amount, start, end) {
+  return SEL.predict + addr32(payer) + addr32(recipient) + addr32(token) + pad32(amount) + pad32(start) + pad32(end);
+}
+const encodeStreamedAt = (t) => SEL.streamedAt + pad32(t);
+const encodeStreamsOf = (who, i) => SEL.streamsOf + addr32(who) + pad32(i);
+
+// =============================== rpc ============================================================
+const app = document.getElementById("app");
+const $ = (h) => { app.innerHTML = h; };
+
+// Endpoint FALLBACK (GOTCHA #147(b)): a public Base RPC rate-limits in storms and a retry that re-hits
+// the SAME url just re-earns the 429. Rotate to the next endpoint on retry, then hold on the last.
+// ENDPOINT-POLICY order: the gate's winner first, then drpc -> base.org. `EP` is set by the boot gate
+// (pickEndpoint) before any read runs; the plain [RPC, …] order is the fallback if that gate is skipped.
+let EP = { url: RPC, cid: CHAIN_ID };
+// Endpoints that FAILED THE TRANSPORT layer (timeout/abort, DNS, connection refused) — as opposed to a
+// 429, which is a live endpoint asking for a pause. A black-holed ?rpc= used to re-enter every rotation
+// after the gate had already rejected it: each pass cost its full 8s abort, and the burst-then-rotate
+// path landed on it repeatedly (measured 47.5s to settle vs 7.2s without the override). Once an
+// endpoint has burned its timeout it is out of the rotation for the life of the page; the gate's winner
+// is always kept so the list can never empty.
+const DEAD = new Set();
+// re-read the gate's winner — the order is computed PER CALL, because the gate resolves after module
+// load, so pinning the order at load would still point at a dead override.
+function epOrder(){
+  const all = [EP.url, ...RPC_ALTS, RPC].filter((u, i, a) => u && a.indexOf(u) === i);
+  const live = all.filter((u) => u === EP.url || !DEAD.has(u));
+  return live.length ? live : all;
+}
+// is this failure a transport death (pull the endpoint) or a live-but-busy answer (keep it)?
+// An AbortError is our own 8s timeout = dead. A 429/HTTP error is the endpoint answering = alive.
+const isDeath = (e) => {
+  const n = (e && e.name) || "";
+  const m = String((e && e.message) || e || "");
+  if (n === "AbortError" || n === "TypeError" || /abort|timeout|Failed to fetch|network/i.test(m)) return true;
+  return false;
+};
+async function rpcOn(method, params, tries = 3) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    const order = epOrder();
+    const url = order[Math.min(i, order.length - 1)];
+    try {
+      const r = await _fetchT(url, { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+      // 429 = the endpoint is ALIVE and asking us to slow down. It answers nothing, so this attempt
+      // still fails and rotates, but the endpoint must not be pulled from the order.
+      if (r.status === 429) throw new Error("rpc 429 (rate limited)");
+      const j = await r.json();
+      if (j.error) throw new Error(j.error.message || "rpc error");
+      if (j.result === undefined) throw new Error(j.message || `rpc ${r.status} (no result)`);
+      return j.result;
+    } catch (e) {
+      last = e;
+      // A REVERT is a real answer (GOTCHA #147): the endpoint did its job and the chain said no. Rotating
+      // it to two more endpoints just re-asks the same question — the impostor row alone spent ~3.5s of
+      // the healthy boot proving the same revert three times. Answer once.
+      if (/revert/i.test(String((e && e.message) || e))) throw e;
+      if (isDeath(e)) DEAD.add(url);           // don't pay its timeout again
+      if (i < tries - 1) await new Promise((s) => setTimeout(s, 400 * (i + 1)));
+    }
+  }
+  throw last;
+}
+async function ethCall(to, data) { return rpcOn("eth_call", [{ to, data }, "latest"]); }
+
+// ONE endpoint gate before any proof work. Without it every rpcOn() pays its own 3-try rotation, and a
+// probe() wraps that twice, so a black-holed ?rpc= left the boot spinner indefinitely: the page had no
+// single place that decided "no endpoint at all" — each read re-discovered it. Probe the override alone
+// first (short timeout), then race the alts; the winner is pinned for the whole page.
+async function pickEndpoint() {
+  const probeEp = async (cand) => {
+    let r;
+    try {
+      r = await _fetchT(cand, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+      }, 5000);
+    } catch (e) { if (isDeath(e)) DEAD.add(cand); throw e; }
+    if (r.status === 429) throw new Error("rpc 429 (rate limited)");
+    const j = await r.json();
+    if (j.error) throw new Error(j.error.message || "rpc error");
+    const c = Number(BigInt(j.result));
+    if (c !== CHAIN_ID) throw new Error(`chainId ${c} ≠ ${CHAIN_ID}`);
+    return cand;
+  };
+  let lastErr = null;
+  try { return await probeEp(RPC); } catch (e) { lastErr = String((e && e.message) || e); }
+  for (let round = 0; round < 2; round++) {
+    try { return await Promise.any(RPC_ALTS.map(probeEp)); }
+    catch (e) { if (e && e.errors) lastErr = e.errors.map(String).join("; "); }
+  }
+  return { err: lastErr || "unreachable" };
+}
+
+// THREE DISTINCT statuses (GOTCHAS #27/#112/#147): 'ok' answered, 'reverted' answered-no,
+// 'unreachable' transport fault. A revert is a REAL answer; a fault is not evidence of absence.
+// ONE attempt: rpcOn already rotates across the whole live endpoint order, so an outer retry here would
+// re-walk that rotation a second time (6 requests per probe) and was most of the post-gate latency.
+async function probe(to, data) {
+  try { return { status: "ok", value: await ethCall(to, data) }; }
+  catch (e) {
+    const m = String((e && e.message) || e);
+    if (/revert/i.test(m)) return { status: "reverted", value: null, err: m };
+    return { status: "unreachable", value: null, err: m };
+  }
+}
+
+// =============================== factory identity proof ==========================================
+// The proof is RUNTIME IDENTITY, not address familiarity (GOTCHA #95). We fetch the code and hash it
+// ourselves, then also require the factory's own getters to answer. The impostor row runs the same
+// probe and must FAIL it.
+async function proveFactory(addr, label, expectBytes) {
+  const out = { label, addr, verdict: null, problems: [], faults: [], codeBytes: null, hashOk: null };
+  let code;
+  try { code = await rpcOn("eth_getCode", [addr, "latest"]); }
+  catch (e) { out.verdict = "unreachable"; out.problems.push("rpc " + String(e.message || e)); return out; }
+
+  out.codeBytes = Math.max(0, (code.length - 2) / 2);
+  if (out.codeBytes === 0) { out.verdict = "wrong"; out.problems.push("NO CODE at this address on Base"); return out; }
+
+  const h = keccak256(code);
+  out.hashOk = h === ARTEFACT_KECCAK;
+  if (out.codeBytes !== expectBytes) out.problems.push(`runtime is ${out.codeBytes} B, not the recorded ${expectBytes} B`);
+  if (!out.hashOk) out.problems.push(`keccak(runtime) = ${short(h)} ≠ artefact ${short(ARTEFACT_KECCAK)}`);
+
+  // CODE EVIDENCE IS DECISIVE. If the fetched runtime already mismatches the recorded artefact on size
+  // or hash, this address is WRONG on identity alone — no getter needed. A later transport fault on a
+  // corroborating getter must NOT downgrade that to "unreachable" (the impostor flake: a 429 on the
+  // probe flipped a proven-wrong row to unreachable).
+  const codeWrong = out.codeBytes !== expectBytes || !out.hashOk;
+
+  // the factory's OWN getters. streamCount() must ANSWER (the impostor REVERTS it — the #95 bite).
+  const sc = await probe(addr, SEL.streamCount + addr32(PAYER));
+  const fb = await probe(addr, SEL.feeBps);
+  const getFault = sc.status === "unreachable" || fb.status === "unreachable";
+  if (sc.status === "reverted") out.problems.push(`streamCount() reverted — no such function (the Sepolia-string impostor REVERTS)`);
+  else if (sc.status !== "ok" && getFault) out.faults.push("streamCount() unreachable");
+  if (fb.status === "reverted") out.problems.push(`feeBps() reverted — no such function`);
+  else if (fb.status !== "ok" && getFault) out.faults.push("feeBps() unreachable");
+
+  if (codeWrong) out.verdict = "wrong";                       // decisive, chain-derived
+  else if (getFault) out.verdict = "unreachable";             // code matches but getters couldn't confirm
+  else if (out.hashOk && sc.status === "ok" && fb.status === "ok") out.verdict = "proved";
+  else out.verdict = out.problems.length ? "wrong" : "unreachable";
+  return out;
+}
+
+// =============================== views ==========================================================
+const nowSec = () => Math.floor(Date.now() / 1000);
+
+async function viewHome() {
+  $("<div class='card'>reading the Base factory and hashing its runtime…</div>");
+
+  // GATE FIRST: decide which endpoint answers (or that none does) in ONE bounded step, before any proof
+  // work. Without this every read discovers the same dead override on its own and the spinner never
+  // resolves. A gate failure is an honest "couldn't read", never a zero.
+  const gate = await pickEndpoint();
+  if (gate.err) {
+    app.innerHTML = `<div class="card"><h1>G2-a streams</h1>
+      <div class="row"><span class="badge warn">unreachable</span>
+      <span class="mut">no Base endpoint answered with the right chainId — this is an honest
+      "couldn't read", NOT a zero. (${esc(gate.err)})</span></div></div>`;
+    return;
+  }
+  EP = { url: gate, cid: CHAIN_ID };
+
+  const real = await proveFactory(FACTORY, "Base factory (this one)", ARTEFACT_BYTES);
+  const imp  = await proveFactory(IMPOSTOR, "the Sepolia string, on Base", IMPOSTOR_BYTES);
+
+  // The live smoke vault's producer is a HISTORIC factory (v1) — its immutable factory() is baked at
+  // CREATE2-mint time, so it can never point at the current factory. Label every vault by the vintage of
+  // the factory that actually minted it, and NEVER promote a historic vault to "current".
+  const vintageOf = (a) => {
+    const x = (a || "").toLowerCase();
+    if (x === FACTORY.toLowerCase()) return "v2.1 (current)";
+    const i = FACTORY_HISTORIC.findIndex((h) => h.toLowerCase() === x);
+    if (i === 0) return "v1 (frozen, PAUSED)";
+    if (i > 0) return "v2 (superseded)";
+    return "unknown producer";
+  };
+  const realVintage = vintageOf(real.addr);
+
+  // live fee + payer's streams + the live smoke vault, straight off chain
+  let feeBps = null, feeFault = null, streams = [], vault = null;
+  try { feeBps = Number(hexToBig(await ethCall(FACTORY, SEL.feeBps))); } catch (e) { feeFault = String(e.message || e); }
+  // enumerate the payer's streams ACROSS THE LINEAGE: the payer's only vaults were minted by v1, so a
+  // v2.1-only scan reads 0 and the card would go empty. Walk each producer's own counter, tag the vintage.
+  for (const src of [FACTORY, ...FACTORY_HISTORIC]) {
+    try {
+      const n = Number(hexToBig(await ethCall(src, SEL.streamCount + addr32(PAYER))));
+      for (let i = 0; i < Math.min(n, 8); i++)
+        streams.push({ vault: addrOf(await ethCall(src, encodeStreamsOf(PAYER, i))), by: src });
+    } catch (e) { /* producer unreachable or no such index — skip, others still list */ }
+  }
+  try {
+    const st = await rpcRaw(VAULT_LIVE);
+    if (st) vault = st;
+  } catch (e) { /* vault row degrades honestly */ }
+
+  const badge = (v) => v === "proved" ? `<span class="badge ok">proved</span>`
+    : v === "wrong" ? `<span class="badge bad">wrong</span>`
+    : `<span class="badge warn">unreachable</span>`;
+
+  const proofRow = (r, expectBytes) => `
+    <tr>
+      <td>${esc(r.label)}<div class="mut">${esc(short(r.addr))}</div></td>
+      <td>${r.codeBytes === null ? "—" : esc(r.codeBytes) + " B"}
+        ${r.codeBytes !== null && r.codeBytes !== expectBytes ? `<span class="mut">(want ${expectBytes})</span>` : ""}</td>
+      <td>${r.hashOk === null ? "—" : r.hashOk ? `<span class="badge ok">match</span>` : `<span class="badge bad">MISMATCH</span>`}</td>
+      <td>${badge(r.verdict)}</td>
+    </tr>
+    ${r.problems.length || r.faults.length ? `<tr><td colspan="4" class="mut">${
+      esc([...r.problems, ...r.faults].join(" · "))}</td></tr>` : ""}`;
+
+  $("");
+
+  app.innerHTML = `
+    <h1>Payment streams</h1>
+    <div class="sub">a stream is a tiny vault that drips a token to a recipient over a fixed window.
+      the factory mints it with CREATE2, so the vault address is <b>predictable before you send</b> —
+      no per-stream key, no off-chain bookkeeping. the recipient pulls whatever has vested, and can do
+      so from <b>any</b> address: the caller pays gas, the recipient gets paid. deployed on Base.</div>
+
+    <div class="card">
+      <div class="row"><b>the factory is proved by its own bytes, not by its address</b>
+        <span class="badge warn">same string ≠ same contract</span></div>
+      <p class="mut" style="margin:10px 0 0">This fleet deployed the SAME contract to Sepolia, OP and
+        Base at three different addresses — and the Base address is <b>not</b> the string you would
+        guess from the Sepolia record. So the page does not trust any string: it fetches the runtime
+        code and hashes it, then requires the factory's own <code>streamCount()</code> to answer. The
+        row below runs the <b>same</b> probe against the Sepolia string as it sits on Base — it must
+        fail, and it does: 594 bytes, wrong hash, <code>streamCount()</code> <b>reverts</b>.</p>
+      <table><thead><tr><th>candidate</th><th>runtime size</th><th>keccak(runtime)</th><th>verdict</th></tr></thead>
+        <tbody>${proofRow(real, ARTEFACT_BYTES)}${proofRow(imp, IMPOSTOR_BYTES)}</tbody></table>
+      <div class="addr"><b>factory</b> ${esc(FACTORY)}
+        &nbsp;<a href="${EXPLORER}/address/${esc(FACTORY)}" target="_blank" rel="noopener">explorer →</a>
+        <br><span class="mut">artefact keccak (from KEY-RECORD) ${esc(ARTEFACT_KECCAK)}</span>
+        <br><span class="mut">vintage: <b>${esc(realVintage)}</b> — this is the live producer; the vaults
+        below were minted by <b>older</b> factories of the same lineage, so their immutable
+        <code>factory()</code> names v1/v2 forever (a CREATE2 mint cannot be repointed)</span></div>
+      <p class="mut" style="margin:8px 0 0">An unreadable RPC renders <b>unreachable</b>, never a silent
+        ok/0 (GOTCHAS #27/#112/#147).</p>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>permissionless, on real money</b><span class="badge ok">already done here</span></div>
+      <p class="mut" style="margin:8px 0 0">The claim below is not a promise — it is a finished
+        transaction on Base. A third key, which is neither the payer nor the recipient, sent a bare
+        <code>withdraw()</code> and the payout went to the recipient:</p>
+      <div class="kv" style="margin-top:10px">
+        <div class="k">withdraw tx</div><div><a href="${EXPLORER}/tx/${esc(WITHDRAW_TX)}" target="_blank" rel="noopener">${esc(short(WITHDRAW_TX))} →</a></div>
+        <div class="k">caller (paid gas)</div><div>${esc(CALLER_THIRD_KEY)} <span class="mut">— a different key</span></div>
+        <div class="k">paid to</div><div>${esc(PAYER)} <span class="mut">— the recipient, from the vault's immutable</span></div>
+        <div class="k">calldata</div><div><code>${esc(SEL.withdraw)}</code> <span class="mut">— no args, so the payee cannot depend on the caller</span></div>
+      </div>
+    </div>
+
+
+    <div class="card">
+      <div class="row"><b>the fee</b>
+        <span class="badge ${feeBps === null ? "warn" : ""}">${feeBps === null ? "unreachable" : feeBps + " bps"}</span></div>
+      <div class="big">${feeBps === null ? "—" : (feeBps / 100).toFixed(2) + "%"}</div>
+      <p class="mut" style="margin:6px 0 0">Read LIVE from the factory's <code>feeBps()</code> — the
+        value above is what the chain says right now, not a snapshot (the owner can change it, bounded
+        by <code>MAX_FEE_BPS() = 500</code>; it has been re-rated twice). The fee is charged only on
+        <b>withdraw</b>, on the amount actually pulled, floored: <code>floor(w * feeBps / 10_000)</code>.
+        Fee recipient: <span class="addr" style="display:inline;padding:2px 6px">${esc(TREASURY)}</span>.
+        ${feeFault ? `<br><span class="mut">rpc: ${esc(feeFault)}</span>` : ""}</p>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>a live stream</b><span class="mut">— read off the vault, no wallet</span></div>
+      <div id="vault"></div>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>streams from the deployer key</b><span class="mut">— streamCount() + streamsOf(), across the lineage</span></div>
+      ${streams.length ? `<div class="addr">${streams.map((s, i) =>
+        `<div>#${i} <a href="#/vault=${esc(s.vault)}">${esc(s.vault)}</a> <span class="mut">minted by ${esc(vintageOf(s.by))}</span></div>`).join("")}</div>`
+      : `<p class="mut" style="margin:8px 0 0">no streams readable right now (either none, or the RPC faulted).</p>`}
+      <p class="mut" style="margin:8px 0 0">Streams are keyed by <b>payer</b>, and the payer index is
+        a plain counter — no enumerable registry beyond <code>streamsOf(payer, i)</code>. That is the
+        whole index: a vault is found by its payer, never by scanning logs. The payer's existing vaults
+        were minted by an <b>older</b> factory, so this walks each producer's own counter and labels the
+        vintage — a v2.1-only scan would read zero and look empty.</p>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>create one</b><span class="mut">— predicted address shown before you send</span></div>
+      <div class="kv" style="margin-top:12px">
+        <div class="k">recipient</div><input id="cRecipient" size="44" placeholder="0x… (who gets paid)" value="${esc(PAYER)}">
+        <div class="k">amount (wei)</div><input id="cAmount" size="20" value="1000000000000000">
+        <div class="k">duration (sec)</div><input id="cDuration" size="10" value="3600">
+        <div class="k">payer</div><input id="cPayer" size="44" value="${esc(PAYER)}">
+      </div>
+      <p class="mut" style="margin:8px 0 0">NOTE: for a native stream the factory requires
+        <b>msg.value == amount exactly</b> (no stranded dust), and the window must be ≥
+        <code>MIN_DURATION()</code>. The predicted address below is the real one — the factory
+        <code>revert</code>s if derivation and CREATE2 disagree.</p>
+      <div class="row" style="margin-top:10px">
+        <button id="cPredict">predict vault address</button>
+        <span class="mut">via <code>predict()</code> eth_call — no state change</span>
+      </div>
+      <div id="cOut"></div>
+    </div>
+
+    <footer>
+      Position, all of it: the factory is the real one (runtime-hashed), the fee is the live
+      <code>feeBps()</code>, the vault is read live, the withdraw path takes no caller argument.
+      Every address here is copied from <code>products/g2a-streams/KEY-RECORD.md</code>.
+    </footer>`;
+
+  renderVault(vault, feeBps);
+  wireCreate();
+}
+
+// read a vault's full live state in one pass; every field independently fault-tolerant
+async function rpcRaw(v) {
+  const p = (data) => ethCall(v, data);
+  const out = {};
+  try {
+    out.recipient = addrOf(await p(SEL.recipient));
+    out.payer = addrOf(await p(SEL.payer));
+    out.token = addrOf(await p(SEL.token));
+    out.amount = hexToBig(await p(SEL.amount));
+    out.start = Number(hexToBig(await p(SEL.start)));
+    out.end = Number(hexToBig(await p(SEL.end)));
+    out.canceled = hexToBig(await p(SEL.canceled)) === 1n;
+    out.withdrawn = hexToBig(await p(SEL.withdrawn));
+    out.withdrawable = hexToBig(await p(SEL.withdrawable));
+    out.streamed = hexToBig(await p(encodeStreamedAt(nowSec())));
+    out.state = await p(SEL.state);
+    return out;
+  } catch (e) { out.err = String(e.message || e); return Object.keys(out).length > 1 ? out : null; }
+}
+
+function renderVault(v, feeBpsLive) {
+  const host = document.getElementById("vault");
+  if (!v) { host.innerHTML = `<p class="mut" style="margin:8px 0 0">vault unreadable — rpc fault, not a zero.</p>`; return; }
+
+  const st = v.state && v.state.length >= 322 ? v.state.replace(/^0x/, "") : null;
+  const rate = st ? BigInt("0x" + st.slice(192, 256)) : null;   // state().rate = amount/duration
+  // rpcRaw aborts mid-sequence on a transport fault and returns a PARTIAL object; if the fault landed
+  // before start/end, `v.start`/`v.end` are undefined and `new Date(undefined*1000).toISOString()`
+  // THROWS "Invalid time value" — crashing the whole render (the flake seen at 1-in-N). Guard the
+  // window so a partial read degrades to "—", never a RangeError.
+  const hasWindow = Number.isFinite(v.start) && Number.isFinite(v.end);
+  const fmtTs = (s) => Number.isFinite(s) ? new Date(s * 1000).toISOString() : "—";
+  const dur = hasWindow ? v.end - v.start : null;
+  const elapsed = hasWindow ? Math.max(0, Math.min(nowSec(), v.end) - v.start) : 0;
+  const pct = (hasWindow && dur > 0) ? Math.min(100, (elapsed / dur) * 100) : (hasWindow ? 100 : 0);
+  const bps = feeBpsLive === null ? null : BigInt(feeBpsLive);
+  const feeNote = (bps !== null && v.withdrawable > 0n) ? applyFee(v.withdrawable, bps) : null;
+
+  host.innerHTML = `
+    <div class="addr"><b>vault</b> ${esc(VAULT_LIVE)}
+      &nbsp;<a href="${EXPLORER}/address/${esc(VAULT_LIVE)}" target="_blank" rel="noopener">explorer →</a></div>
+    <div class="kv" style="margin-top:12px">
+      <div class="k">payer</div><div>${esc(v.payer)}</div>
+      <div class="k">recipient</div><div>${esc(v.recipient)}</div>
+      <div class="k">token</div><div>${v.token === "0x0000000000000000000000000000000000000000" ? "native ETH" : esc(v.token)}</div>
+      <div class="k">amount</div><div>${fmt18(v.amount)} ${v.token === "0x0000000000000000000000000000000000000000" ? "ETH" : "units"}</div>
+      <div class="k">window</div><div>${dur === null ? "—" : esc(dur) + "s"} &nbsp;<span class="mut">(${fmtTs(v.start)} → ${fmtTs(v.end)})</span></div>
+      <div class="k">rate</div><div>${rate === null ? "—" : rate.toString() + " wei/s"}</div>
+      <div class="k">streamed</div><div>${fmt18(v.streamed)}</div>
+      <div class="k">withdrawn</div><div>${fmt18(v.withdrawn)}</div>
+      <div class="k">withdrawable</div><div>${fmt18(v.withdrawable)} ${v.canceled ? `<span class="badge warn">canceled — 0 by design</span>` : ""}</div>
+    </div>
+    <div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div>
+    <p class="mut" style="margin:4px 0 0">${pct.toFixed(1)}% vested by wall-clock.</p>
+    ${v.canceled
+      ? `<p class="mut" style="margin:6px 0 0"><b>This stream was canceled.</b> Note
+         <code>withdrawable()</code> is 0 even though a pure time-based figure would keep rising —
+         <code>cancel()</code> paid the accrued part out and refunded the payer the rest, so the vault
+         is empty and the stream is over. The vault's <code>withdrawable()</code> is guarded, not naive
+         (a naive one would pay a second time out of money already refunded).</p>`
+      : `<p class="mut" style="margin:6px 0 0">Not canceled. The payer can <code>cancel()</code> at any
+         time (payer-only): that pays the recipient what has accrued, refunds the payer the rest, and
+         ends the stream — after which <code>withdrawable()</code> is 0 <b>by design</b>, even though a
+         pure time-based figure would keep rising. The vault is cancel-aware, not naive.</p>`}
+    <p class="mut" style="margin:8px 0 0"><b>withdraw() takes NO arguments.</b> The recipient is an
+      immutable on the vault, so whoever sends the tx, the money goes to ${esc(short(v.recipient))}.
+      The caller is only the gas payer — that is what "permissionless" means here.
+      ${feeNote ? `Pulling now would split floor(w·${esc(bps)}/10000) = ${fmt18(feeNote.fee)} to the fee recipient and <b>${fmt18(feeNote.recipientOut)}</b> to the recipient.` : ""}</p>
+    <div class="row" style="margin-top:10px">
+      <button id="vWithdraw">send withdraw()</button>
+      <button class="ghost" id="vProbe">trace the split (eth_call)</button>
+      <span class="mut" id="vMsg"></span>
+    </div>`;
+
+  document.getElementById("vProbe").onclick = async () => {
+    const msg = document.getElementById("vMsg");
+    msg.textContent = "calling…";
+    try {
+      // withdraw() returns (uint256 recipientOut, uint256 fee) — the split, straight from the code
+      const r = await ethCall(VAULT_LIVE, SEL.withdraw);
+      const w = r.replace(/^0x/, "");
+      const recipientOut = BigInt("0x" + w.slice(0, 64));
+      const fee = BigInt("0x" + w.slice(64, 128));
+      if (recipientOut === 0n && fee === 0n) { msg.textContent = "withdrawable is 0 — a no-op, not an error (status 1)."; return; }
+      msg.innerHTML = `recipientOut = <b>${esc(fmt18(recipientOut))}</b>, fee = <b>${esc(fmt18(fee))}</b> — the recipient is paid regardless of who calls.`;
+    } catch (e) { msg.textContent = "revert/fault: " + String(e.message || e); }
+  };
+  document.getElementById("vWithdraw").onclick = async () => {
+    const msg = document.getElementById("vMsg");
+    if (!window.ethereum) { msg.textContent = "no window.ethereum — calldata: " + SEL.withdraw; return; }
+    try {
+      msg.textContent = "awaiting wallet…";
+      const [from] = await window.ethereum.request({ method: "eth_requestAccounts" });
+      const tx = await window.ethereum.request({ method: "eth_sendTransaction",
+        params: [{ from, to: VAULT_LIVE, data: SEL.withdraw }] });
+      msg.innerHTML = `sent <code>${esc(short(tx))}</code> from ${esc(short(from))} — the payout still goes to ${esc(short(v.recipient))}.`;
+    } catch (e) { msg.textContent = "wallet: " + (e.message || e); }
+  };
+}
+
+function wireCreate() {
+  document.getElementById("cPredict").onclick = async () => {
+    const out = document.getElementById("cOut");
+    const recipient = document.getElementById("cRecipient").value.trim();
+    const payer = document.getElementById("cPayer").value.trim();
+    const amount = document.getElementById("cAmount").value.trim();
+    const dur = Number(document.getElementById("cDuration").value.trim());
+    if (!isAddr(recipient) || !isAddr(payer)) { out.innerHTML = `<p class="mut">recipient/payer must be 20-byte addresses.</p>`; return; }
+    if (!(dur >= 60)) { out.innerHTML = `<p class="mut">duration must be ≥ MIN_DURATION() = 60s.</p>`; return; }
+    const start = nowSec() + 30, end = start + dur;
+    const data = encodePredict(payer, recipient, "0x0000000000000000000000000000000000000000", amount, start, end);
+    out.innerHTML = `<p class="mut" style="margin-top:10px">predicting…</p>`;
+    try {
+      const addr = addrOf(await ethCall(FACTORY, data));
+      out.innerHTML = `
+        <div class="addr" style="margin-top:10px"><b>predicted vault</b> ${esc(addr)}
+          &nbsp;<a href="${EXPLORER}/address/${esc(addr)}" target="_blank" rel="noopener">explorer →</a>
+          <div class="mut">window ${new Date(start * 1000).toISOString()} → ${new Date(end * 1000).toISOString()}</div></div>
+        <p class="mut" style="margin:8px 0 0">The real CREATE2 address, from the factory's own
+          <code>predict()</code>, for the payer's CURRENT nonce. Nonce is an input: if the payer sends
+          anything else first, re-predict (this is GOTCHA #128 — a CREATE prediction is only valid for
+          the nonce you read).</p>
+        <pre>createStream calldata:\n${esc(data)}</pre>`;
+    } catch (e) { out.innerHTML = `<p class="mut" style="margin-top:10px">fault/revert: ${esc(String(e.message || e))}</p>`; }
+  };
+}
+
+// =============================== router =========================================================
+function route() {
+  const h = location.hash || "#/";
+  const m = h.match(/vault=(0x[0-9a-fA-F]{40})/);
+  viewHome();
+}
+window.addEventListener("hashchange", route);
+route();
+
+globalThis.__g2a = { sig, SEL, keccak256, utf8Hex, applyFee, encodeCreateStream, encodePredict,
+  encodeStreamedAt, encodeStreamsOf, proveFactory, viewHome, renderVault, FACTORY, FACTORY_HISTORIC,
+  VAULT_LIVE, TREASURY, PAYER, IMPOSTOR, ARTEFACT_KECCAK, ARTEFACT_BYTES, IMPOSTOR_BYTES, RPC, WITHDRAW_TX,
+  CALLER_THIRD_KEY };
+</script>
+
+<div class="dx-foot">
+  <div class="dx-foot-in">
+    <div class="dx-foot-brand"><a href="../index.html">← DEX fleet</a>
+      <span>truth-only · every number read on-chain</span></div>
+    <nav class="dx-foot-nav" aria-label="All pages"><a href="../subscribe/index.html">Subscriptions</a><a href="../merchant/index.html">For merchants</a><a href="../g2b-escrow/index.html">Escrow</a><a href="../g2a-streams/index.html">Streams</a><a href="../f1a-payment-links/index.html">Payment links</a><a href="../p2-forwarder/index.html">Forwarder</a><a href="../p3-router/index.html">Swap router</a><a href="../g4b-receipts/index.html">Receipts</a><a href="../g3a-sponsorship/index.html">Gasless</a><a href="../f1c-duster/index.html">Dust → USDC</a><a href="../miniapp/index.html">Pay in-feed</a><a href="../fleet-executor/index.html">Executor</a><a href="../status/index.html">Status</a><a href="../security/index.html">Security</a><a href="../changelog/index.html">Changelog</a></nav>
+  </div>
+</div>
+<!-- dx-timelock:start -->
+<div class="dx-timelock" id="dxTimelock" style="display:none;max-width:720px;margin:14px auto 0;padding:9px 12px;border:1px solid var(--line,#2a3550);border-radius:8px;font-size:12.5px;color:var(--mut,#8fa0be)"></div>
+<script>
+"use strict";
+(function () {
+  var el = document.getElementById("dxTimelock"); if (!el) return;
+  var ADDR = "0x3882A049ee99B96Ea68DF317713ed76008b9A075", BAKED = 172800, RPC = "https://base-rpc.publicnode.com";
+  var SEL = "0x7aadef8b";
+  function hum(s) { var d = s / 86400; return (d % 1 === 0) ? (d + " day" + (d > 1 ? "s" : "")) : Math.round(s / 3600) + "h"; }
+  function paint(sec, live) {
+    if (!sec) return;
+    el.innerHTML = "<b>a fee change is STAGED, not instant</b> — the owner's raise or recipient change "
+      + "waits <b>" + hum(sec) + "</b> (the contract's TIMELOCK) before it can be committed"
+      + (live ? " — read live on-chain" : " — TIMELOCK " + hum(BAKED) + " baked, RPC unreachable") + ".";
+    el.style.display = "";
+  }
+  paint(BAKED, false);
+  try {
+    var ac = new AbortController(); var to = setTimeout(function () { ac.abort(); }, 8000);
+    fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, signal: ac.signal,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: ADDR, data: SEL }, "latest"] }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (j && j.result) paint(parseInt(j.result.slice(-16), 16), true); })
+      .catch(function () {})
+      .finally(function () { clearTimeout(to); });
+  } catch (e) {}
+})();
+</script>
+<!-- dx-timelock:end -->
+</body>
+</html>

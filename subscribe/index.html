@@ -1,0 +1,799 @@
+<!doctype html>
+<html data-theme="light" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Start a subscription — one approval, N recurring laps</title>
+<meta name="theme-color" content="#1f6feb">
+<link rel="icon" type="image/svg+xml" href="_assets/favicon.svg">
+<meta property="og:type" content="website">
+<!-- absolute URLs: social crawlers (Farcaster/Twitter) do not resolve relative og:image paths -->
+<meta property="og:url" content="https://dngr2.github.io/dex-products/subscribe/">
+<meta property="og:site_name" content="DEX fleet">
+<meta property="og:title" content="Pay on schedule. Release on proof.">
+<meta property="og:description" content="One approval. Non-custodial recurring and per-second metered escrow on Base. Fee read live on-chain.">
+<meta property="og:image" content="https://dngr2.github.io/dex-products/subscribe/_assets/og-card-ai.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Pay on schedule. Release on proof.">
+<meta name="twitter:description" content="One approval. Non-custodial recurring and per-second metered escrow on Base. Fee read live on-chain.">
+<meta name="twitter:image" content="https://dngr2.github.io/dex-products/subscribe/_assets/og-card-ai.jpg">
+<style>
+  :root { --fg:#0f172a; --muted:#64748b; --bg:#f8fafc; --card:#fff; --line:#e2e8f0; --btn:#1f6feb;
+          --ok:#0f9d58; --warn:#b45309; --bad:#b91c1c; --chip:#f1f5f9; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; color:var(--fg); background:var(--bg); }
+  .wrap { max-width:620px; margin:5vh auto; padding:0 16px 40px; }
+  .hero { position:relative; overflow:hidden; border:1px solid var(--line); border-radius:14px; padding:22px; margin-bottom:14px; min-height:220px; display:flex; flex-direction:column; justify-content:flex-end;
+          background-image:url("_assets/hero-light.webp"); background-size:cover; background-position:right center; background-color:#eef3fb; }
+  .hero::before { content:""; position:absolute; inset:0; background:linear-gradient(90deg, rgba(248,250,252,.95) 0%, rgba(248,250,252,.80) 40%, rgba(248,250,252,.42) 62%, rgba(248,250,252,.06) 88%); }
+  .hero > * { position:relative; z-index:1; }
+  .hero h2 { margin:0; font-size:23px; line-height:1.15; letter-spacing:-.02em; font-weight:750; }
+  .hero h2 em { color:var(--btn); font-style:normal; }
+  .hero p { margin:8px 0 0; font-size:14px; color:var(--muted); max-width:420px; }
+  .hero .chips2 { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+  .hero .chip2 { font-size:12px; font-weight:650; background:rgba(255,255,255,.85); border:1px solid var(--line); border-radius:999px; padding:5px 12px; color:var(--fg); }
+  .hero .chip2.hot { color:var(--ok); border-color:#bbf7d0; background:#f0fdf4; }
+  @media (max-width:640px){ .hero { background-position:70% center; } .hero::before { background:linear-gradient(180deg, rgba(248,250,252,.94) 0%, rgba(248,250,252,.9) 60%, rgba(248,250,252,.55) 100%); } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:22px; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+  header { display:flex; align-items:center; gap:10px; margin-bottom:4px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); flex:0 0 auto; }
+  .dot.ok { background:var(--ok); box-shadow:0 0 0 4px rgba(15,157,88,.12); }
+  .dot.bad { background:var(--bad); box-shadow:0 0 0 4px rgba(185,28,28,.12); }
+  h1 { font-size:17px; margin:0; font-weight:650; flex:1; }
+  .sub { color:var(--muted); font-size:13.5px; margin:0 0 18px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:14px 0 5px; font-weight:650; text-transform:uppercase; letter-spacing:.03em; }
+  input, select { width:100%; padding:11px; border:1px solid var(--line); border-radius:9px; font:14.5px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--fg); background:#fff; }
+  input:focus, select:focus { outline:2px solid rgba(31,111,235,.25); border-color:rgba(31,111,235,.4); }
+  button { width:100%; margin-top:18px; padding:13px; border:0; border-radius:9px; background:var(--btn); color:#fff; font-size:15.5px; font-weight:650; cursor:pointer; }
+  button:disabled { opacity:.55; cursor:default; }
+  .foot { color:var(--muted); font-size:12px; margin-top:14px; }
+  .verif { color:var(--muted); font-size:12px; margin-top:10px; line-height:1.55; }
+  .verif b { color:var(--fg); }
+  .verif a { font-weight:650; text-decoration:none; }
+  .verif a:hover { text-decoration:underline; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap:anywhere; }
+  .err { color:var(--bad); font-size:13.5px; margin-top:10px; }
+  .hide { display:none; }
+  .fee { background:var(--chip); border:1px solid var(--line); border-radius:9px; padding:10px 12px; font-size:13px; margin-top:16px; }
+  .rows { margin-top:16px; }
+  .row { display:flex; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid var(--line); font-size:13.5px; }
+  .row:last-child { border-bottom:0; }
+  .row .k { color:var(--muted); flex:0 0 auto; }
+  .row .v { font-weight:600; text-align:right; word-break:normal; }
+  .amt { font-size:26px; font-weight:700; letter-spacing:-.01em; }
+  .pay { margin-top:18px; border-top:1px solid var(--line); padding-top:16px; }
+  .depaddr { display:block; font-size:12px; color:var(--fg); background:var(--chip); border:1px solid var(--line); border-radius:8px; padding:8px; margin-top:6px; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+  .chip { border:1px solid var(--line); border-radius:999px; padding:6px 13px; font-size:13.5px; font-weight:600; background:#fff; cursor:pointer; }
+  .chip.on { color:var(--btn); border-color:rgba(31,111,235,.4); background:rgba(31,111,235,.06); }
+  .badge { font-size:11px; padding:2px 8px; border-radius:999px; background:var(--chip); color:var(--muted); font-weight:650; }
+  .paynote { margin-top:8px; font-size:12.5px; color:var(--warn); background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 10px; }
+  .deadrop { margin-top:8px; font-size:12.5px; color:var(--bad); background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:8px 10px; }
+  .gasbox { margin-top:12px; font-size:12.5px; background:#f1f5f9; border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .gasbox b.bad { color:var(--bad); } .gasbox b.ok { color:var(--ok); }
+  .walletbtn { width:auto; display:inline-block; margin:8px 6px 0 0; padding:8px 14px; font-size:13.5px; }
+  .warnbadge { font-size:11px; padding:2px 8px; border-radius:999px; background:#fef3c7; color:#92400e; font-weight:650; }
+  .copynote { color:var(--ok); font-size:12px; margin-left:6px; }
+  .standing { margin-top:10px; font-size:12.5px; color:var(--fg); background:var(--chip); border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+  .standing:empty { display:none; }
+  #l2escrow a { color:var(--btn); font-weight:600; text-decoration:none; }
+</style>
+<link rel="stylesheet" href="../_assets/theme.css">
+
+</head>
+<body>
+<!-- dx-chrome --><style>
+/* dx-chrome — shared, namespaced. Injected by chrome.py; do not hand-edit in built files. */
+.dx-top{position:relative;z-index:50;background:rgba(248,250,252,.86);backdrop-filter:blur(8px);border-bottom:1px solid #e2e8f0}
+.dx-top-in{max-width:900px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px}
+.dx-home{display:inline-flex;align-items:center;gap:7px;font:600 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color:#0f172a;text-decoration:none;padding:6px 2px}
+.dx-home:hover{color:#1f6feb}
+.dx-home .dx-arrow{color:#1f6feb}
+.dx-tag{font:500 12.5px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#64748b;margin-left:auto}
+.dx-foot{position:relative;z-index:50;margin-top:56px;border-top:1px solid #e2e8f0;background:rgba(248,250,252,.86)}
+.dx-foot-in{max-width:900px;margin:0 auto;padding:24px 20px 40px}
+.dx-foot-brand{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+.dx-foot-brand a{font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;text-decoration:none}
+.dx-foot-brand a:hover{color:#1f6feb}
+.dx-foot-brand span{font:500 12.5px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#64748b}
+.dx-foot-nav{display:flex;gap:9px;flex-wrap:wrap}
+.dx-foot-nav a{font:600 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;
+  text-decoration:none;background:rgba(255,255,255,.6);border:1px solid #e2e8f0;border-radius:999px;padding:7px 13px}
+.dx-foot-nav a:hover{border-color:#1f6feb;color:#1f6feb}
+@media(max-width:600px){.dx-tag{display:none}}
+</style>
+<div class="dx-top">
+  <div class="dx-top-in">
+    <a class="dx-home" href="../index.html"><span class="dx-arrow">←</span> DEX fleet</a>
+    <span class="dx-tag">non-custodial rails on Base</span>
+  </div>
+</div>
+<div class="wrap">
+  <div class="hero">
+    <h2>Pay on schedule.<br>Release on <em>proof</em>.</h2>
+    <p>Charge a small amount, again and again — or get paid from another country — without a card eating 30¢ a time, and without a bank. <b>Flat 5%.</b> One approval, then it runs itself.</p>
+    <div class="chips2">
+      <span class="chip2">one approval, then it runs</span>
+      <span class="chip2 hot" id="herofee">flat 5% — read live</span>
+      <span class="chip2">you can look without a wallet</span>
+      <span class="chip2">cheaper than a card under $14</span>
+    </div>
+  </div>
+  <div class="card">
+    <header><span class="dot" id="dot"></span><h1>Start a subscription</h1><span class="badge" id="badge">recurring · one approval</span></header>
+    <p class="sub">Pick a ticket and a period. Get <b>one</b> <span class="mono">approve()</span> — the mandate. A keeper then fires one already-deployed stream per period, funded from that allowance. No new contract, no per-period signature, no per-period gas from you.
+    <a href="./V21-DEAD-DROP-FIX-EVIDENCE-2026-11-10.md">deploy evidence ↗</a></p>
+
+    <label for="to">Pay to (merchant / your wallet)</label>
+    <input id="to" placeholder="0x…" value="0x27339Dd87d6A22414b79Dc7966526906bfBe92C2" spellcheck="false" autocomplete="off">
+
+    <label for="amt">Ticket per period (USDC)</label>
+    <input id="amt" value="5" inputmode="decimal" spellcheck="false" autocomplete="off">
+    <div class="chips" id="chips">
+      <span class="chip" data-amt="5">$5</span>
+      <span class="chip" data-amt="10">$10</span>
+      <span class="chip" data-amt="25">$25</span>
+      <span class="chip" data-amt="50">$50</span>
+    </div>
+
+    <label for="period">Period (one vault's window)</label>
+    <select id="period">
+      <option value="86400">daily (24h)</option>
+      <option value="604800" selected>weekly (7d)</option>
+      <option value="2592000">monthly (~30d)</option>
+      <option value="120">demo (120s)</option>
+    </select>
+
+    <label for="count">How many periods (laps)</label>
+    <input id="count" value="4" inputmode="numeric" spellcheck="false" autocomplete="off">
+
+    <div class="fee" id="fee">Fee: <b>read live from the factory's <span class="mono">feeBps()</span></b>
+      (<span class="mono" id="feebps">reading…</span> <span class="chip" id="feeretry" title="re-read the chain">retry</span>) — taken <b>on withdrawal</b>, to the treasury. A subscription adds no second fee model.</div>
+
+    <button id="go">Build the mandate</button>
+    <p class="err hide" id="err"></p>
+    <div id="result" class="hide"></div>
+    <p class="foot" id="status">Checking the live StreamFactory…</p>
+    <p class="verif" id="verified"><b>Source-verified.</b> This page's factory — plus the fleet's related
+      escrow and receipt contracts — is published on Sourcify; deployed code matches its Solidity source
+      byte-for-byte.
+      <a href="https://repo.sourcify.dev/8453/0x3882A049ee99B96Ea68DF317713ed76008b9A075" target="_blank" rel="noopener">factory</a> ·
+      <a href="https://repo.sourcify.dev/8453/0x4B05fA6aD0Ba0D0120Dce19Ce34dde6d1316C237" target="_blank" rel="noopener">escrow</a> ·
+      <a href="https://repo.sourcify.dev/8453/0xAE5951d25FEDD06aB7e124e91Dac3AC20f5e7cAF" target="_blank" rel="noopener">receipts</a>
+      <span style="opacity:.75">(Sourcify grade <span class="mono">match</span>)</span></p>
+  </div>
+</div>
+
+<!-- ── inline QR ─────────────────────────────────────────────────────────────────────
+     Byte-mode, ECC-L, versions 1–10, ZERO deps. Byte-identical to p2-forwarder's block
+     (GOTCHA #131, do not rewrite): GF(256) prim 0x11d, renders to <canvas>.
+     Usage:  qrHTML(text, px)  -> canvas markup;  call drawQRs() after inserting it.
+──────────────────────────────────────────────────────────────────────────────────── -->
+<script src="../_assets/lib.js"></script>
+<script>
+(function (G) {
+  "use strict";
+  // GF(256), primitive 0x11d — Reed–Solomon over the QR field
+  var EXP = new Array(256), LOG = new Array(256);
+  (function () { var x = 1; for (var i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 0x100) x ^= 0x11d; } EXP[255] = EXP[0]; })();
+  function gmul(a, b) { return (a === 0 || b === 0) ? 0 : EXP[(LOG[a] + LOG[b]) % 255]; }
+  function rsGen(n) { var p = [1]; for (var i = 0; i < n; i++) { var r = new Array(p.length + 1).fill(0); for (var j = 0; j < p.length; j++) { r[j] ^= gmul(p[j], 1); r[j + 1] ^= gmul(p[j], EXP[i]); } p = r; } return p; }
+  function rsEcc(data, n) { var gen = rsGen(n), res = data.concat(new Array(n).fill(0)); for (var i = 0; i < data.length; i++) { var c = res[i]; if (c !== 0) for (var j = 1; j < gen.length; j++) res[i + j] ^= gmul(gen[j], c); } return res.slice(data.length); }
+
+  // per-version Reed–Solomon block structure, ECC-L only: [count, totalCw, dataCw]
+  var RS = { 1: [[1, 26, 19]], 2: [[1, 44, 34]], 3: [[1, 70, 55]], 4: [[1, 100, 80]], 5: [[1, 134, 108]],
+    6: [[2, 86, 68]], 7: [[2, 98, 78]], 8: [[2, 121, 97]], 9: [[2, 146, 116]], 10: [[2, 86, 68], [2, 87, 69]] };
+  var ALIGN = { 1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34], 7: [6, 22, 38], 8: [6, 24, 42], 9: [6, 26, 46], 10: [6, 28, 50] };
+  function dataCw(v) { var n = 0; RS[v].forEach(function (b) { n += b[0] * b[2]; }); return n; }
+  function byteCap(v) { return Math.floor((dataCw(v) * 8 - 4 - (v < 10 ? 8 : 16)) / 8); }
+
+  function bchDigit(x) { var d = 0; while (x !== 0) { d++; x >>>= 1; } return d; }
+  function formatBits(ecl, mask) { var data = (ecl << 3) | mask, d = data << 10; while (bchDigit(d) - bchDigit(0x537) >= 0) d ^= 0x537 << (bchDigit(d) - bchDigit(0x537)); return ((data << 10) | d) ^ 0x5412; }
+  function versionBits(v) { var d = v << 12; while (bchDigit(d) - bchDigit(0x1f25) >= 0) d ^= 0x1f25 << (bchDigit(d) - bchDigit(0x1f25)); return (v << 12) | d; }
+
+  function chooseVersion(n) { for (var v = 1; v <= 10; v++) if (n <= byteCap(v)) return v; throw new Error("qr: too long (" + n + " bytes)"); }
+
+  function codewords(text, version) {
+    var bytes = Array.prototype.slice.call(new TextEncoder().encode(text)), bits = [];
+    function put(val, len) { for (var i = len - 1; i >= 0; i--) bits.push((val >>> i) & 1); }
+    put(4, 4); put(bytes.length, version < 10 ? 8 : 16); bytes.forEach(function (c) { put(c, 8); });
+    var total = dataCw(version), cap = total * 8;
+    for (var i = 0; i < 4 && bits.length < cap; i++) bits.push(0);
+    while (bits.length % 8 !== 0) bits.push(0);
+    var data = []; for (var k = 0; k < bits.length; k += 8) { var x = 0; for (var j = 0; j < 8; j++) x = (x << 1) | bits[k + j]; data.push(x); }
+    var pad = [0xEC, 0x11], pi = 0; while (data.length < total) data.push(pad[pi++ % 2]);
+    var blocks = [], off = 0;
+    RS[version].forEach(function (blk) { for (var i = 0; i < blk[0]; i++) { var dd = data.slice(off, off + blk[2]); off += blk[2]; blocks.push({ d: dd, e: rsEcc(dd, blk[1] - blk[2]) }); } });
+    var out = [], maxD = Math.max.apply(null, blocks.map(function (b) { return b.d.length; }));
+    for (var i2 = 0; i2 < maxD; i2++) blocks.forEach(function (b) { if (i2 < b.d.length) out.push(b.d[i2]); });
+    var maxE = Math.max.apply(null, blocks.map(function (b) { return b.e.length; }));
+    for (var i3 = 0; i3 < maxE; i3++) blocks.forEach(function (b) { if (i3 < b.e.length) out.push(b.e[i3]); });
+    return out;
+  }
+
+  function blank(s) { var m = []; for (var i = 0; i < s; i++) m.push(new Array(s).fill(null)); return m; }
+  function finder(m, r, c) { for (var dr = -1; dr <= 7; dr++) for (var dc = -1; dc <= 7; dc++) { var rr = r + dr, cc = c + dc; if (rr < 0 || cc < 0 || rr >= m.length || cc >= m.length) continue; var on = (dr >= 0 && dr <= 6 && (dc === 0 || dc === 6)) || (dc >= 0 && dc <= 6 && (dr === 0 || dr === 6)) || (dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4); m[rr][cc] = on ? 1 : 0; } }
+  function align(m, cx, cy) { for (var dr = -2; dr <= 2; dr++) for (var dc = -2; dc <= 2; dc++) m[cy + dr][cx + dc] = (Math.max(Math.abs(dr), Math.abs(dc)) !== 1) ? 1 : 0; }
+  function reserved(s, version) {
+    var rm = blank(s).map(function (r) { return r.map(function () { return false; }); });
+    function mark(r, c, dim) { for (var dr = 0; dr < dim; dr++) for (var dc = 0; dc < dim; dc++) { var rr = r + dr, cc = c + dc; if (rr >= 0 && cc >= 0 && rr < s && cc < s) rm[rr][cc] = true; } }
+    mark(-1, -1, 9); mark(-1, s - 8, 9); mark(s - 8, -1, 9);
+    for (var i = 0; i < s; i++) { rm[6][i] = true; rm[i][6] = true; }
+    ALIGN[version].forEach(function (cy) { ALIGN[version].forEach(function (cx) { if ((cx === 6 && cy === 6) || (cx === 6 && cy === s - 7) || (cx === s - 7 && cy === 6)) return; mark(cy - 2, cx - 2, 5); }); });
+    for (var a = 0; a < 9; a++) { rm[8][a] = true; rm[a][8] = true; }
+    for (var b = 0; b < 8; b++) { rm[8][s - 1 - b] = true; rm[s - 1 - b][8] = true; }
+    rm[s - 8][8] = true;
+    if (version >= 7) for (var p = 0; p < 6; p++) for (var q = 0; q < 3; q++) { rm[s - 11 + q][p] = true; rm[p][s - 11 + q] = true; }
+    return rm;
+  }
+  function functions(m, version) {
+    var s = m.length;
+    finder(m, 0, 0); finder(m, 0, s - 7); finder(m, s - 7, 0);
+    for (var i = 8; i < s - 8; i++) { if (m[6][i] === null) m[6][i] = i % 2 === 0 ? 1 : 0; if (m[i][6] === null) m[i][6] = i % 2 === 0 ? 1 : 0; }
+    ALIGN[version].forEach(function (cy) { ALIGN[version].forEach(function (cx) { if ((cx === 6 && cy === 6) || (cx === 6 && cy === s - 7) || (cx === s - 7 && cy === 6)) return; align(m, cx, cy); }); });
+    for (var a = 0; a < 9; a++) { if (m[8][a] === null) m[8][a] = 0; if (m[a][8] === null) m[a][8] = 0; }
+    for (var b = 0; b < 8; b++) { if (m[8][s - 1 - b] === null) m[8][s - 1 - b] = 0; if (m[s - 1 - b][8] === null) m[s - 1 - b][8] = 0; }
+    m[s - 8][8] = 1;
+    if (version >= 7) { var vb = versionBits(version); for (var k = 0; k < 18; k++) { var bit = (vb >>> k) & 1, aa = Math.floor(k / 3), bb = k % 3; m[s - 11 + bb][aa] = bit; m[aa][s - 11 + bb] = bit; } }
+  }
+  function placeData(m, cw) {
+    var s = m.length, dir = -1, row = s - 1, col = s - 1, idx = 0, total = cw.length * 8;
+    function bitAt(i) { return i < total ? (cw[i >> 3] >>> (7 - (i & 7))) & 1 : 0; }
+    for (; col > 0; col -= 2) {
+      if (col === 6) col--;
+      for (;;) {
+        for (var c = 0; c < 2; c++) { var cc = col - c; if (m[row][cc] === null) m[row][cc] = bitAt(idx++); }
+        row += dir; if (row < 0 || row >= s) { row -= dir; dir = -dir; break; }
+      }
+    }
+  }
+  function maskFn(mask, r, c) {
+    switch (mask) {
+      case 0: return (r + c) % 2 === 0; case 1: return r % 2 === 0; case 2: return c % 3 === 0;
+      case 3: return (r + c) % 3 === 0; case 4: return (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0;
+      case 5: return ((r * c) % 2 + (r * c) % 3) === 0; case 6: return (((r * c) % 2 + (r * c) % 3) % 2) === 0;
+      case 7: return (((r + c) % 2 + (r * c) % 3) % 2) === 0;
+    }
+  }
+  function applyMask(m, mask, version) { var s = m.length, rm = reserved(s, version); for (var r = 0; r < s; r++) for (var c = 0; c < s; c++) if (!rm[r][c] && maskFn(mask, r, c)) m[r][c] ^= 1; }
+  function putFormat(m, ecl, mask) {
+    var s = m.length, bits = formatBits(ecl, mask); function bit(i) { return (bits >>> i) & 1; }
+    for (var i = 0; i <= 5; i++) m[i][8] = bit(i);
+    m[7][8] = bit(6); m[8][8] = bit(7); m[8][7] = bit(8);
+    for (var k = 9; k < 15; k++) m[8][14 - k] = bit(k);
+    for (var a = 0; a < 8; a++) m[8][s - 1 - a] = bit(a);
+    for (var b = 8; b < 15; b++) m[s - 15 + b][8] = bit(b);
+    m[s - 8][8] = 1;
+  }
+  // ISO/IEC 18004 mask penalty; lowest score wins (matches the reference encoder exactly)
+  function penalty(m) {
+    var s = m.length, p = 0, cont = new Array(s + 1).fill(0);
+    for (var r = 0; r < s; r++) { var prev = m[r][0], len = 0; for (var c = 0; c < s; c++) { if (m[r][c] === prev) len++; else { if (len >= 5) cont[len]++; len = 1; prev = m[r][c]; } } if (len >= 5) cont[len]++; }
+    for (var c2 = 0; c2 < s; c2++) { var pv = m[0][c2], ln = 0; for (var r2 = 0; r2 < s; r2++) { if (m[r2][c2] === pv) ln++; else { if (ln >= 5) cont[ln]++; ln = 1; pv = m[r2][c2]; } } if (ln >= 5) cont[ln]++; }
+    for (var l = 5; l <= s; l++) p += cont[l] * (l - 2);
+    for (var r3 = 0; r3 < s - 1; r3++) { var c3 = 0; while (c3 < s - 1) { var tr = m[r3][c3 + 1]; if (tr !== m[r3 + 1][c3 + 1]) { c3 += 2; continue; } if (tr !== m[r3][c3]) { c3 += 1; continue; } if (tr !== m[r3 + 1][c3]) { c3 += 1; continue; } p += 3; c3 += 1; } }
+    function L3(get) { var cnt = 0; for (var i = 0; i < s - 10; i++) { var o1 = !get(i + 1) && get(i + 4) && !get(i + 5) && get(i + 6) && !get(i + 9) && get(i) && get(i + 2) && get(i + 3) && !get(i + 7) && !get(i + 8) && !get(i + 10); var o2 = !get(i + 1) && get(i + 4) && !get(i + 5) && get(i + 6) && !get(i + 9) && !get(i) && !get(i + 2) && !get(i + 3) && get(i + 7) && get(i + 8) && get(i + 10); if (o1 || o2) { cnt++; if (get(i + 10)) i++; } } return cnt; }
+    for (var r4 = 0; r4 < s; r4++) p += 40 * L3(function (i) { return m[r4][i]; });
+    for (var c4 = 0; c4 < s; c4++) p += 40 * L3(function (i) { return m[i][c4]; });
+    var dark = 0; for (var r5 = 0; r5 < s; r5++) for (var c5 = 0; c5 < s; c5++) dark += m[r5][c5];
+    p += Math.floor(Math.abs(dark * 100 / (s * s) - 50) / 5) * 10;
+    return p;
+  }
+  function scoreMatrix(s, v, cw, mask) {
+    var m = blank(s); functions(m, v); placeData(m, cw); applyMask(m, mask, v); putFormat(m, 1, mask);
+    // reference scores in "test" mode: format/version/dark modules are zero while scoring
+    for (var i = 0; i <= 5; i++) m[i][8] = 0; m[7][8] = 0; m[8][8] = 0; m[8][7] = 0;
+    for (var k = 9; k < 15; k++) m[8][14 - k] = 0;
+    for (var a = 0; a < 8; a++) m[8][s - 1 - a] = 0;
+    for (var b = 8; b < 15; b++) m[s - 15 + b][8] = 0;
+    m[s - 8][8] = 0;
+    if (v >= 7) for (var p = 0; p < 6; p++) for (var q = 0; q < 3; q++) { m[s - 11 + q][p] = 0; m[p][s - 11 + q] = 0; }
+    return m;
+  }
+  function encode(text) {
+    var v = chooseVersion(Array.prototype.slice.call(new TextEncoder().encode(text)).length);
+    var cw = codewords(text, v), s = 4 * v + 17, best = 0, bestPen = Infinity;
+    for (var mk = 0; mk < 8; mk++) { var pen = penalty(scoreMatrix(s, v, cw, mk)); if (pen < bestPen) { bestPen = pen; best = mk; } }
+    var m = blank(s); functions(m, v); placeData(m, cw); applyMask(m, best, v); putFormat(m, 1, best);
+    return { size: s, version: v, matrix: m };
+  }
+
+  function escA(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
+  G.qrHTML = function (text, px) {
+    px = px || 200;
+    return '<canvas class="qr" data-qr="' + escA(text) + '" data-px="' + px +
+      '" style="width:' + px + 'px;height:' + px + 'px;background:#fff;border-radius:8px"></canvas>';
+  };
+  G.drawQRs = function (root) {
+    var nodes = (root || document).querySelectorAll("canvas[data-qr]:not([data-done])");
+    Array.prototype.forEach.call(nodes, function (cv) {
+      var text = cv.getAttribute("data-qr"), px = parseInt(cv.getAttribute("data-px") || "200", 10);
+      try {
+        var r = encode(text), s = r.size, quiet = 4, total = s + quiet * 2;
+        // size the BACKING STORE in whole device pixels so each module is an exact integer
+        // number of them — a 4px/module code scans; a fractional 3.4px one can fail at 1x.
+        var dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 4);
+        var scale = Math.max(2, Math.floor((px * dpr) / total));
+        var size = scale * total;
+        cv.width = size; cv.height = size;
+        var g = cv.getContext("2d");
+        g.fillStyle = "#fff"; g.fillRect(0, 0, size, size);
+        g.fillStyle = "#000";
+        for (var y = 0; y < s; y++) for (var x = 0; x < s; x++) if (r.matrix[y][x]) g.fillRect((x + quiet) * scale, (y + quiet) * scale, scale, scale);
+        cv.setAttribute("data-done", "1");
+      } catch (e) { cv.setAttribute("title", "qr: " + e.message); }
+    });
+  };
+})(window);
+</script>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// START A SUBSCRIPTION — self-serve. One static file, zero deps, opens from file://.
+//
+// THE PRODUCT (g2a subscription): a subscription is a STANDING, SELF-RE-FUNDED STREAM. ONE ERC20
+// `approve(factory, amount*count)` by the payer IS the mandate. A keeper then calls the ALREADY-
+// DEPLOYED `createStreamFor(payer, …)` once per period, pulling `amount` from that allowance. Zero
+// new on-chain code — the "deploy" is a config. This page computes the exact mandate calldata.
+//
+// "one approval = N recurring laps": the approve covers N × ticket; each lap consumes one ticket.
+// There is no on-chain period state — THE PERIOD IS THE VAULT WINDOW. A missed period is a HOLE,
+// not a DEBT (no dunning, no retry, no proration).
+//
+// THE ONE THING IT MUST NOT DO: fabricate a value. The fee is read LIVE from factory.feeBps() (and
+// it is MUTABLE); if that read faults, the page reads the registry's toll() as a SECOND SOURCE, and if
+// BOTH fault it says "unreachable" (with a retry) rather than showing a baked number.
+//
+// SOURCES (all copied from files, never retyped — GOTCHA #73):
+//   factory + USDC + treasury <- g2a-streams/KEY-RECORD.md (StreamFactory Base, verified on-chain)
+//   create/withdraw gas, the $5 ticket, the sub-floor line <- g2a-streams/MINFEE-DECISION.md
+//     (+ this session's receipts: create tx 0x5ca93a46… used 1,097,911 gas; approve 0x6a11617a… 55,437)
+//   createStreamFor / approve signatures <- g2a-streams/src/StreamFactory.sol (selectors DERIVED below)
+// ══════════════════════════════════════════════════════════════════════════════════════════
+"use strict";
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+
+
+const CFG = {
+  chainId: 8453,                                    // Base MAINNET
+  rpc: "https://base-rpc.publicnode.com",           // publicnode answers ACAO:* (mainnet.base.org sends null)
+  factory:  "0x3882A049ee99B96Ea68DF317713ed76008b9A075", // g2a-streams v2.1 (V21-DEAD-DROP-FIX-EVIDENCE-2026-11-10.md)
+  usdc:     "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // Base USDC (6dp)
+  treasury: "0x5c0fc0917260A0656D253f1625053e3E6Dd2Ef3c", // KEY-RECORD: feeRecipient == factory owner
+  // NO bakedFeeBps constant (S4-4). The fee is read from the CHAIN, and if the factory's own feeBps()
+  // faults the page reads the registry's toll() as a genuine SECOND SOURCE — never a BAKED number that
+  // goes stale the moment the owner stages a raise. If BOTH reads fault, the page renders "unreachable"
+  // with a retry, instead of a plausible-looking 500. (Audit S4-4 ← S3-3: "remove the baked value;
+  // render unreachable with the retry; if a fallback is wanted, read TollRegistry as the second source".)
+  // second source: the deployed, chain-read toll for THIS product's key. Address copied from
+  // g4c-toll-registry/DEPLOY-EVIDENCE.md (GOTCHA #73); the key is keccak-derived, never typed.
+  tollRegistry: "0xc8319D6fbc0A8f1685Df9c567557141A289b7A1b", // g4c TollRegistry (per-product toll)
+  productKey: "g2a-streams",                        // this product's own registry key (never typed as a hash)
+  // gas honesty (MEASURED, not modelled): create 1,063,711 gas (MINFEE-DECISION) / 1,097,911 (receipt
+  // 0x5ca93a46…); withdraw 92,906. At a 6e6 wei gas price that is ≈ $0.0155 per full lap (create +
+  // withdraw) — so a period below ≈ $0.31 at 500 bps tolls less than its own gas. The live bps is read
+  // above; the crossover maths uses whatever the chain returns. Break-even ≈ lapGasUSD / (bps/10000).
+  createGas: 1063711, withdrawGas: 92906, gasPriceWei: 6000000, ethUsd: 2227,
+};
+// PER-TOKEN DECIMALS. This page is USDC-ONLY today (no picker), but every unit<->human
+// conversion now goes through `decOf`, so adding a token cannot silently 10^12-error. The
+// token table is COPY-SHAPED from g2b-escrow/frontend/index.html (the dec-aware model).
+// Base live-verified this session: USDC 6 · USDT 6 · DAI 18 · WETH 18.
+const TOKENS = {
+  "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": { sym:"USDC", dec:6  },
+  "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2": { sym:"USDT", dec:6  },
+  "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": { sym:"DAI",  dec:18 },
+  "0x4200000000000000000000000000000000000006": { sym:"WETH", dec:18 },
+};
+const decOf = (addr) => (TOKENS[(addr||"").toLowerCase()] || {}).dec ?? 18;
+const symOf = (addr) => (TOKENS[(addr||"").toLowerCase()] || {}).sym ?? "token";
+const DEC = decOf(CFG.usdc);   // the page's token decimals (USDC = 6 today); the ONE source of scale
+const SYM = symOf(CFG.usdc);   // the page's token symbol (USDC today); derived so a flip cannot lie
+const QS = (() => { try { return new URLSearchParams((location && location.search) || ""); } catch (e) { return new URLSearchParams(""); } })();
+try { const _r = QS.get("rpc"); if (_r) CFG.rpc = _r; } catch (e) {}
+const Q_TO = QS.get("to") || QS.get("addr");
+
+// selectors DERIVED in-page by keccak (never typed) — asserted == cast sig in verify.mjs
+const MASK = (1n << 64n) - 1n;
+const RC = [0x1n,0x8082n,0x800000000000808an,0x8000000080008000n,0x808bn,0x80000001n,0x8000000080008081n,0x8000000000008009n,0x8an,0x88n,0x80008009n,0x8000000an,0x8000808bn,0x800000000000008bn,0x8000000000008089n,0x8000000000008003n,0x8000000000008002n,0x8000000000000080n,0x800an,0x800000008000000an,0x8000000080008081n,0x8000000000008080n,0x80000001n,0x8000000080008008n];
+const ROT = [[0,36,3,41,18],[1,44,10,45,2],[62,6,43,15,61],[28,55,25,21,56],[27,20,39,8,14]];
+function rol(x, n){ n %= 64n; return ((x << n) | (x >> (64n - n))) & MASK; }
+function keccakF(A){ for (let r=0;r<24;r++){ const Cc=[0n,0n,0n,0n,0n],D=[0n,0n,0n,0n,0n];
+  for (let x=0;x<5;x++) Cc[x]=A[x][0]^A[x][1]^A[x][2]^A[x][3]^A[x][4];
+  for (let x=0;x<5;x++) D[x]=Cc[(x+4)%5]^rol(Cc[(x+1)%5],1n);
+  for (let x=0;x<5;x++) for (let y=0;y<5;y++) A[x][y]^=D[x];
+  const B=[[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n]];
+  for (let x=0;x<5;x++) for (let y=0;y<5;y++) B[y][(2*x+3*y)%5]=rol(A[x][y],BigInt(ROT[x][y]));
+  for (let x=0;x<5;x++) for (let y=0;y<5;y++) A[x][y]=B[x][y]^((~B[(x+1)%5][y])&B[(x+2)%5][y]&MASK);
+  A[0][0]^=RC[r]; } }
+function hexToBytes(h){ h=h.replace(/^0x/,""); const o=new Uint8Array(h.length/2); for (let i=0;i<o.length;i++) o[i]=parseInt(h.substr(i*2,2),16); return o; }
+function bytesToHex(b){ return "0x"+[...b].map(x=>x.toString(16).padStart(2,"0")).join(""); }
+function keccak256(input){ const msg=typeof input==="string"?hexToBytes(input):input; const rate=136,P=0x01,S=0x80;
+  const padLen=rate-(msg.length%rate); const pad=new Uint8Array(padLen); pad[0]=P; pad[pad.length-1]|=S;
+  const buf=new Uint8Array(msg.length+pad.length); buf.set(msg); buf.set(pad,msg.length);
+  const A=[[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n]];
+  for (let off=0;off<buf.length;off+=rate){ for (let i=0;i<rate/8;i++){ let lane=0n; for (let b=7;b>=0;b--) lane=(lane<<8n)|BigInt(buf[off+i*8+b]); A[i%5][(i/5)|0]^=lane; } keccakF(A); }
+  const out=new Uint8Array(32); for (let i=0;i<4;i++){ let lane=A[i%5][(i/5)|0]; for (let b=0;b<8;b++){ out[i*8+b]=Number(lane&0xffn); lane>>=8n; } } return bytesToHex(out); }
+const utf8Hex = (s) => bytesToHex(new TextEncoder().encode(s));
+const sig = (s) => keccak256(utf8Hex(s)).slice(0, 10);
+const SIGS = {
+  feeBps:"feeBps()", feeRecipient:"feeRecipient()", owner:"owner()", paused:"paused()",
+  minDuration:"MIN_DURATION()", maxFeeBps:"MAX_FEE_BPS()", nonce:"nonce(address)",
+  toll:"toll(bytes32)",                            // S4-4 second source: the registry's per-product toll
+  createStreamFor:"createStreamFor(address,address,address,uint256,uint64,uint64)",
+  approve:"approve(address,uint256)", allowance:"allowance(address,address)", balanceOf:"balanceOf(address)",
+};
+const SEL = {}; for (const [k,s] of Object.entries(SIGS)) SEL[k] = sig(s);
+
+const strip0x=(h)=>(h||"").replace(/^0x/i,"").toLowerCase();
+const pad32=(h)=>strip0x(h).padStart(64,"0");
+const wordAddr=(a)=>strip0x(a).padStart(64,"0");
+const wordUint=(v)=>BigInt(v).toString(16).padStart(64,"0");
+const shortA=(a)=>a?a.slice(0,6)+"…"+a.slice(-4):"";
+const esc=(s)=>String(s).replace(/[&<>"]/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// plural: the page says "1 laps" / "1 periods" without this. n===1 -> singular (no number suffix needed
+// beyond n itself), else plural. Defaults to the +s form so a caller reads naturally.
+const pl=(n,s,p)=>Number(n)===1?s:(p||s+"s");
+const nLap=(n)=>`${esc(String(n))} ${pl(n,"lap","laps")}`;
+const nPer=(n)=>`${esc(String(n))} ${pl(n,"period","periods")}`;
+// the page's own path (no ?query, no #fragment) — the base of a shareable join link
+const PAGE_URL = () => ((location.href||"").split("#")[0].split("?")[0]) || "join/index.html";
+
+async function rpc(method, params){ let res; try { res = await _fetchT(CFG.rpc,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method,params})}); }
+  catch(e){ throw new Error("transport: "+(e&&e.message?e.message:e)); }
+  if(!res.ok) throw new Error("http "+res.status);
+  const j=await res.json(); if(j.error) throw new Error("rpc: "+(j.error.message||JSON.stringify(j.error))); if(j.result==null) throw new Error("rpc: null result"); return j.result; }
+const ethCall=(to,data)=>rpc("eth_call",[{to,data},"latest"]);
+const asAddr=(h)=>"0x"+strip0x(h).slice(24);
+const asUint=(h)=>BigInt(h);
+
+const LIVE = { ok:false, why:"", feeBps:null, feeRecipient:null, owner:null, paused:null, minDur:null, maxBps:null,
+               feeSrc:null };   // feeSrc: "factory" (primary) | "registry" (second source) | null (both faulted)
+let CHECKED = null;   // one shared liveCheck() promise, so a fast click cannot read a not-yet-resolved fee
+
+// S4-4 SECOND SOURCE: read THIS product's toll from the deployed registry. The factory's feeBps() is
+// the primary truth; if it faults, the registry's toll(productKey) is a genuine chain read, NOT a baked
+// number — so the page can still name a rate without inventing one. Returns uint16 bps, or null.
+const tollKey = () => keccak256(utf8Hex(CFG.productKey));      // keccak-derived, never a typed hash
+async function readTollBps(){
+  try {
+    const raw = await ethCall(CFG.tollRegistry, SEL.toll + strip0x(tollKey()).padStart(64,"0"));
+    // toll(bytes32) -> (address recipient, uint16 feeBps, bool live); feeBps is word #2. A reverting
+    // (unregistered) key throws in rpc() -> null, so "no such product" never reads as 0 bps.
+    const words = strip0x(raw);
+    return Number(BigInt("0x"+words.slice(64,128)) % (1n<<16n));
+  } catch(e){ return null; }
+}
+
+async function liveCheck(){
+  try {
+    const [cid, code, bps, recip, owner, paused, minDur, maxBps] = await Promise.all([
+      rpc("eth_chainId",[]), rpc("eth_getCode",[CFG.factory,"latest"]),
+      ethCall(CFG.factory,SEL.feeBps), ethCall(CFG.factory,SEL.feeRecipient), ethCall(CFG.factory,SEL.owner),
+      ethCall(CFG.factory,SEL.paused), ethCall(CFG.factory,SEL.minDuration), ethCall(CFG.factory,SEL.maxFeeBps),
+    ]);
+    if (Number(BigInt(cid)) !== CFG.chainId) throw new Error("wrong chain " + cid);
+    if (strip0x(code).length === 0) throw new Error("no factory code");
+    Object.assign(LIVE, { ok:true, why:"", feeBps:Number(asUint(bps)%(1n<<16n)), feeSrc:"factory",
+      feeRecipient:asAddr(recip), owner:asAddr(owner), paused:Number(asUint(paused))!==0,
+      minDur:Number(asUint(minDur)), maxBps:Number(asUint(maxBps)) });
+    return true;
+  } catch(e){
+    // the factory read faulted. Try the SECOND SOURCE (the registry's toll) before giving up: a live
+    // registry read beats a BAKED constant. Either way the page names the source, and both-faulted is a
+    // real "unreachable" state with a retry — never a plausible-looking 500.
+    const t = await readTollBps();
+    Object.assign(LIVE,{ok:false, why:String(e&&e.message?e.message:e), feeBps:t, feeSrc:t!=null?"registry":null,
+      feeRecipient:null, owner:null, paused:null, minDur:null, maxBps:null});
+    return false;
+  }
+}
+// what the UI shows: a bps that is either LIVE (factory) or from the registry's toll, else null=unreachable.
+function feeDisplay(){
+  if (LIVE.ok && LIVE.feeBps!=null) return { bps:LIVE.feeBps, src:"factory" };
+  if (LIVE.feeBps!=null)            return { bps:LIVE.feeBps, src:"registry" };
+  return { bps:null, src:null };
+}
+// ── STANDING-ALLOWANCE READ (the honest answer to "a permit can be drained") ──────────────────────
+// Reads what the payer has ALREADY left open to the factory, live. Two reads, both real: the USDC
+// allowance[payer][factory] and the factory's nonce[payer] (vaults created for this payer). Either
+// failing yields null, and the caller prints an "unread" phrase rather than a fabricated number.
+async function readStanding(payer){
+  if (!/^0x[0-9a-fA-F]{40}$/.test(payer||"")) return null;
+  try {
+    const [alw, nonce] = await Promise.all([
+      ethCall(CFG.usdc, SEL.allowance + wordAddr(payer) + wordAddr(CFG.factory)),
+      ethCall(CFG.factory, SEL.nonce + wordAddr(payer)),
+    ]);
+    return { allowanceUnits: asUint(alw), vaults: Number(asUint(nonce)) };
+  } catch(e){ return null; }
+}
+// paid-through estimate: the page knows the SCHEDULE it is about to sign, not chain history, so this is
+// deliberately approximate and labelled so. vaults-created ≈ periods landed; "behind" is schedule-vs-chain.
+function paidThrough(count, vaults, periodSec){
+  const landed = Math.max(0, Math.min(count, vaults|0));
+  const behind = Math.max(0, count - landed);
+  const nowS = Math.floor(Date.now()/1000);
+  const through = landed>0 ? new Date((nowS + (landed-1)*periodSec)*1000) : null;
+  return { landed, behind, through };
+}
+// render the ONE fee truth from whatever the chain gave us. Source is ALWAYS named: a live factory
+// read, the registry's second source, or — if both faulted — "unreachable" with no number at all.
+function renderFee(){ const f=feeDisplay();
+  const e=document.getElementById("feebps");
+  if(e) e.textContent = f.src==="factory"  ? (f.bps+" bps — live")
+                       : f.src==="registry" ? (f.bps+" bps — live (via toll registry; factory read faulted)")
+                       : "unreachable — retry";
+  const h=document.getElementById("herofee");
+  if(h) h.textContent = f.bps!=null
+    ? "flat "+(f.bps/100).toFixed(2).replace(/\.?0+$/,"")+"% — "+(f.src==="factory"?"read live on-chain":"live via toll registry")
+    : "flat fee — unreachable"; }
+// the retry affordance: re-run liveCheck and repaint. Bound to #feeretry once (see main()).
+async function retryFee(){ const e=document.getElementById("feebps"); if(e) e.textContent="reading…";
+  CHECKED = liveCheck(); try { await CHECKED; } catch(e){}
+  renderFee(); await renderHealth(); }
+async function renderHealth(){ const dot=document.getElementById("dot"), st=document.getElementById("status");
+  if (!dot||!st) return;
+  if (LIVE.ok){ dot.className="dot ok"; st.textContent="Live · factory code ok · feeBps "+LIVE.feeBps+" (mutable) · feeRecipient "+shortA(LIVE.feeRecipient)+" · owner "+shortA(LIVE.owner)+" · MIN_DURATION "+LIVE.minDur+"s · paused "+LIVE.paused; }
+  else if (LIVE.feeBps!=null){ dot.className="dot bad"; st.textContent="factory read faulted ("+LIVE.why+") — fee shown from the toll registry's live toll, not a baked number. "; }
+  else { dot.className="dot bad"; st.textContent="UNREACHABLE ("+LIVE.why+") — factory AND registry reads faulted; no fee number is invented. "; } }
+
+function parseHuman(str,dec){ str=String(str==null?"":str).trim().replace(/^\$/,""); if(!str) return 0n;
+  if(!/^\d*\.?\d*$/.test(str)) throw new Error("not a number");
+  const [w,f=""]=str.split("."); return BigInt(w||"0")*(10n**BigInt(dec))+BigInt((f+"0".repeat(dec)).slice(0,dec)||"0"); }
+function fmtUnits(u,dec){ const s=u.toString().padStart(dec+1,"0"); const whole=s.slice(0,s.length-dec), frac=s.slice(s.length-dec).replace(/0+$/,""); return whole+(frac?"."+frac:""); }
+
+// ── THE MANDATE: approve(factory, amount*count). This is the ONE tx the payer signs. ────────────
+function approveCalldata(spender, amountUnits){ return SEL.approve + wordAddr(spender) + wordUint(amountUnits); }
+// ── THE EXIT: approve(factory, 0). The allowance is a STANDING permission — the factory keeps it
+// until the payer takes it back. Same selector as the mandate, spender + a zero word, so the revoke is
+// one tx (or copy-paste calldata with no wallet). Bounded, not self-expiring: revoke is the way out.
+function revokeCalldata(spender){ return SEL.approve + wordAddr(spender) + wordUint(0); }
+// ── the keeper's repeating call (shown, not signed here): createStreamFor(payer,recipient,token,amount,start,end)
+function keeperCalldata(payer, recipient, token, amountUnits, start, end){
+  return SEL.createStreamFor + wordAddr(payer) + wordAddr(recipient) + wordAddr(token) + wordUint(amountUnits) + wordUint(start) + wordUint(end); }
+
+// gas honesty: exact lap cost, and the toll-vs-gas crossover, from the measured constants
+function lapCostUsd(){ const g = BigInt(CFG.createGas + CFG.withdrawGas) * BigInt(CFG.gasPriceWei); // wei
+  return Number(g) / 1e18 * CFG.ethUsd; }
+function crossoverUsd(bps){ return lapCostUsd() * 10000 / bps; }   // amount where toll == lap gas
+
+function feeOn(amount, bps){ return (BigInt(amount) * BigInt(bps)) / 10000n; }
+
+async function onGo(){
+  // A fast click can beat the async liveCheck(). Await it here so the fee used in the MATH is the same
+  // value the chip shows — otherwise the built mandate quotes baked bps while the chip later says live.
+  if (CHECKED) { try { await CHECKED; } catch(e){} }
+  const to = (document.getElementById("to")||{}).value.trim();
+  const amtStr = (document.getElementById("amt")||{}).value.trim();
+  const countStr = (document.getElementById("count")||{}).value.trim();
+  const periodSec = Number((document.getElementById("period")||{}).value || 0);
+  const errEl = document.getElementById("err");
+  const setErr = (t)=>{ if(errEl){ errEl.textContent=t||""; errEl.classList[t?"remove":"add"]("hide"); } };
+  setErr("");
+  if (!/^0x[0-9a-fA-F]{40}$/.test(to)){ setErr("Pay-to must be a 0x… 40-hex address"); return; }
+  let per; try { per = parseHuman(amtStr, DEC); } catch(e){ setErr("Ticket must be a number like 5 or 12.50"); return; }
+  if (per <= 0n){ setErr("Ticket must be greater than zero"); return; }
+  const count = parseInt(countStr, 10);
+  if (!(count > 0)){ setErr("Periods must be a positive whole number"); return; }
+  if (LIVE.ok && LIVE.minDur && periodSec < LIVE.minDur){ setErr("Period shorter than MIN_DURATION ("+LIVE.minDur+"s)"); return; }
+
+  const total = per * BigInt(count);
+  // the bps used in the MATH is the SAME source renderFee() names: a live factory read, else the
+  // registry's toll. Both faulted -> refuse to quote a number (the caller says so), never a baked 500.
+  const f = feeDisplay();
+  const bps = f.bps;
+  if (bps == null){ setErr("Fee unreachable — factory and registry both faulted; press retry, or wait for the RPC."); return; }
+  const feeU = feeOn(per, bps), netU = per - feeU;
+  const mandate = approveCalldata(CFG.factory, total);
+  const now = Math.floor(Date.now()/1000), end = now + periodSec;
+  // the keeper's call, shown with REAL current values (the keeper re-resolves start=now at send).
+  // payer = the subscriber; unknown without a wallet, so ?payer= overrides, else assume the pay-to.
+  const payerK = (QS.get("payer") && /^0x[0-9a-fA-F]{40}$/.test(QS.get("payer"))) ? QS.get("payer") : to;
+  const keeper = keeperCalldata(payerK, to, CFG.usdc, per, now, end);
+  // the handover link: this page + the exact ask, so a scanned code rebuilds the SAME mandate. The
+  // link carries inputs (to/amt/count/period), never signed state — the mandate itself is calldata.
+  const joinLink = PAGE_URL() + "?" + new URLSearchParams({ to, amt: fmtUnits(per,DEC), count: String(count), period: String(periodSec) }).toString();
+
+  const box = document.getElementById("result");
+  const humanPer = fmtUnits(per,DEC), humanTotal = fmtUnits(total,DEC), humanFee = fmtUnits(feeU,DEC), humanNet = fmtUnits(netU,DEC);
+  const perUsd = Number(humanPer);
+  const cross = crossoverUsd(bps);
+  const gasNeg = perUsd < cross;
+  box.innerHTML =
+    `<div class="pay">
+       <div><span class="amt">${esc(humanPer)} ${esc(SYM)}</span> <span class="mut">× ${nLap(count)} = ${esc(humanTotal)} ${esc(SYM)}</span></div>
+       <div style="margin-top:6px">→ pays <b class="mono">${esc(shortA(to))}</b> every ${esc(String(periodSec))}s, for ${nPer(count)}</div>
+       <div class="mut" id="l1line" style="margin-top:6px;font-size:12.5px">self-healing: if a lap is missed it re-fires on its ORIGINAL window — <b id="l1behind">reading…</b></div>
+
+       <div class="paynote"><b>one approval = ${nLap(count)}.</b> The single <span class="mono">approve</span> below authorises ${esc(humanTotal)} ${esc(SYM)} to the factory; a keeper fires one already-deployed stream per period, each pulling ${esc(humanPer)} ${esc(SYM)} from that allowance. Nothing is on chain until you send the approval.</div>
+
+       <div class="deadrop"><b>⚠ APPROVE this address — don't TRANSFER to it.</b> The factory funds by
+         <b>pull</b>: each lap it calls <span class="mono">transferFrom</span> against your allowance, so the
+         correct verb is <span class="mono">approve(factory, …)</span>. If you instead <b>transfer</b> USDC
+         straight to the factory <span class="mono">${esc(shortA(CFG.factory))}</span>, it now <b>sticks</b>
+         (this factory accepts it) rather than vanishing — but it still does not pay a lap, so you meant
+         <span class="mono">approve</span>. (On the older factory a bare transfer <b>stranded</b> with no
+         rescue at all — that is the 5.01 hole. This one is future-proofed: the owner can
+         <span class="mono">rescue()</span> a mis-send.)</div>
+
+       <label style="margin-top:16px">the mandate — sign ONCE (${nLap(count)})</label>
+       <span class="depaddr mono" id="mandate">${esc(mandate)}</span>
+       <div class="chips">
+         <span class="chip" id="copycalldata">copy approve() calldata</span>
+         <span class="chip" id="revokechip">revoke (approve 0)</span>
+         <span class="chip" id="copyto">copy factory address</span>
+         <span class="chip" id="copylink">copy join link</span>
+       </div>
+       <div class="standing" id="standing"></div>
+
+       <div style="text-align:center;margin-top:14px">
+         <div class="qrbox" style="display:inline-block;padding:10px;background:#fff;border:1px solid var(--line);border-radius:10px">${qrHTML(joinLink, 220)}</div>
+         <div class="mut" style="font-size:12.5px;margin-top:8px">scan to hand the payer this exact ask — the link carries to / ticket / laps / period</div>
+       </div>
+
+       <div class="gasbox">
+         <b>the honest gas maths.</b> Each lap is one <span class="mono">createStreamFor</span> tx (measured <b>≈${esc(CFG.createGas.toLocaleString())} gas</b>, receipt <span class="mono">0x5ca93a46…</span>) + the vault's own withdraw. At ~6e6 wei gas that is <b>≈ $${lapCostUsd().toFixed(4)} per lap</b>.
+         At ${esc(String(bps))} bps a period tolls ${(bps/100).toFixed(2)}% — so a ticket below <b>≈ $${cross.toFixed(2)}</b> tolls less than its own gas (net-negative).
+         <b class="${gasNeg?"bad":"ok"}">Your ticket is $${perUsd.toFixed(2)} ${gasNeg ? "— BELOW the ≈$"+cross.toFixed(2)+" floor" : "— above the ≈$"+cross.toFixed(2)+" floor"}</b>.
+         ${gasNeg ? "Raise the ticket (≥ ~$"+cross.toFixed(2)+"), or prove it as a low-value demo." : "Good: the toll clears the gas."}
+       </div>
+
+       <div class="rows">
+         <div class="row"><span class="k">fee per period (floor(ticket×${esc(String(bps))}/10000))</span><span class="v">${esc(humanFee)} ${esc(SYM)}</span></div>
+         <div class="row"><span class="k">merchant receives per period</span><span class="v">${esc(humanNet)} ${esc(SYM)}</span></div>
+         <div class="row"><span class="k">fee over ${nLap(count)} (if all fire)</span><span class="v">${esc(fmtUnits(feeU*BigInt(count),DEC))} ${esc(SYM)}</span></div>
+         <div class="row"><span class="k">the fee goes to</span><span class="v mono">${esc(LIVE.ok?shortA(LIVE.feeRecipient):shortA(CFG.treasury))}${LIVE.ok&&LIVE.feeRecipient.toLowerCase()===LIVE.owner.toLowerCase()?" (== factory owner)":""}</span></div>
+       </div>
+
+       <div class="paynote" style="color:#334155;background:#f8fafc;border-color:#e2e8f0">
+         The keeper then calls, each period (start = now, end = now+period, resolved at send):
+         <span class="depaddr mono" style="margin-top:6px">${esc(keeper)}</span>
+       </div>
+
+       <div id="walletline" style="margin-top:12px"></div>
+
+       <div class="paynote" id="l2escrow" style="margin-top:12px;color:#334155;background:#f8fafc;border-color:#e2e8f0">
+         <b>what if I pay and don't get it?</b> A stream pays on a schedule — there is <b>no chargeback on a pull</b>.
+         If you want a refund path, that's the escrow page: it holds the funds and releases them on delivery, or
+         refunds them, with an arbiter for disputes. <b>Per-transaction, not per-period</b> — recurring laps here are
+         not individually escrowed.
+         <a href="../g2b-escrow/index.html">g2b escrow →</a>
+       </div>
+     </div>`;
+  box.classList.remove("hide");
+  try { drawQRs(box); } catch (e) { /* canvas paint is best-effort */ }
+  document.getElementById("copycalldata").onclick = () => copy(mandate, "copycalldata");
+  document.getElementById("copyto").onclick = () => copy(CFG.factory, "copyto");
+  if (document.getElementById("copylink")) document.getElementById("copylink").onclick = () => copy(joinLink, "copylink");
+  const rc = document.getElementById("revokechip");
+  if (rc) rc.onclick = () => revokeAction(payerK, "revokechip");
+  renderWallet(payerK, total, mandate, joinLink);
+  // L1: the honest status the chain can answer — vaults created for this payer vs the planned laps.
+  const l1 = document.getElementById("l1behind");
+  if (l1) readStanding(payerK).then((s)=>{
+    if (!s){ l1.textContent = "chain unread — schedule shown as planned"; return; }
+    const p = paidThrough(count, s.vaults, periodSec);
+    l1.textContent = p.landed>=count ? `all ${pl(count,"lap")} landed`
+      : `${p.behind} of ${count} ${pl(count,"lap")} behind`;
+  }).catch(()=>{ l1.textContent = "chain unread — schedule shown as planned"; });
+  // standing allowance: show what the factory may STILL pull, live, once a wallet/payer is known.
+  const standingEl = document.getElementById("standing");
+  if (standingEl){
+    readStanding(payerK).then((s)=>{
+      if (!s){ standingEl.innerHTML = ""; return; }
+      standingEl.innerHTML = `factory may still pull <b>${esc(fmtUnits(s.allowanceUnits,DEC))} ${esc(SYM)}</b> from <span class="mono">${esc(shortA(payerK))}</span>` +
+        (s.vaults>0 ? ` · ${esc(String(s.vaults))} ${pl(s.vaults,"vault")} created for this payer` : "") +
+        `. <span style="opacity:.8">the allowance is a standing permission — revoke anytime with <span class="mono">approve(factory, 0)</span>. <b>Audited finding (live v1):</b> the factory checks no caller, so until the gate ships <b>anyone</b> can consume your allowance toward a recipient of their choosing; the mandate binds it to one (recipient, token, ticket, period).</span>`;
+    }).catch(()=>{ standingEl.innerHTML=""; });
+  }
+
+  const st = document.getElementById("status");
+  if (st) st.textContent = "Mandate built: approve("+shortA(CFG.factory)+", "+humanTotal+" "+SYM+") = "+count+" laps of "+humanPer+" "+SYM+". "+
+    (LIVE.ok ? "Factory live, fee "+bps+" bps." : "Factory read faulted — fee "+bps+" bps from the toll registry; send still works (approve needs no RPC).");
+}
+
+function renderWallet(payer, totalUnits, mandate){
+  const line = document.getElementById("walletline"); if (!line) return;
+  const has = typeof window!=="undefined" && window.ethereum && window.ethereum.request;
+  if (!has){ line.innerHTML = `<span class="warnbadge">view-only</span> no wallet detected — this page signs nothing. Send <span class="mono">approve(factory, ${esc(fmtUnits(totalUnits,DEC))}e${DEC})</span> to ${esc(symOf(CFG.usdc))} <span class="mono">${esc(shortA(CFG.usdc))}</span> from your wallet.`; return; }
+  line.innerHTML = `<button class="walletbtn" id="sendapprove">Approve the mandate from my wallet</button> <span class="copynote" id="sendnote"></span>`;
+  document.getElementById("sendapprove").onclick = async () => {
+    const btn = document.getElementById("sendapprove"); btn.disabled = true;
+    try {
+      const accts = await window.ethereum.request({ method:"eth_requestAccounts" });
+      const hx = await window.ethereum.request({ method:"eth_sendTransaction", params:[{ from:accts[0], to:CFG.usdc, data:mandate }] });
+      document.getElementById("sendnote").textContent = "sent "+String(hx).slice(0,12)+"… — the mandate is live; a keeper can now fire the laps.";
+    } catch(e){ document.getElementById("sendnote").textContent = "wallet: "+(e&&e.message?e.message:e); }
+    finally { btn.disabled = false; }
+  };
+}
+// revoke: with a wallet, send approve(factory, 0); without, copy the revoke calldata. Same shape as
+// the copy-approve chip — the exit must be as reachable as the entrance.
+async function revokeAction(payer, noteId){
+  const cd = revokeCalldata(CFG.factory);
+  const has = typeof window!=="undefined" && window.ethereum && window.ethereum.request;
+  if (!has || (payer && !/^0x[0-9a-fA-F]{40}$/.test(payer))) return copy(cd, noteId);
+  try {
+    const accts = await window.ethereum.request({ method:"eth_requestAccounts" });
+    const hx = await window.ethereum.request({ method:"eth_sendTransaction", params:[{ from:accts[0], to:CFG.usdc, data:cd }] });
+    const el=document.getElementById(noteId); if (el) el.textContent = "revoke sent "+String(hx).slice(0,10)+"…";
+  } catch(e){
+    // wallet refused / no wallet on THIS action -> fall back to copying so the exit still works
+    copy(cd, noteId);
+  }
+}
+function copy(text, noteId){ const el=document.getElementById(noteId); const done=()=>{ if(el){ const o=el.textContent; el.textContent=o+" ✓"; setTimeout(()=>{ el.textContent=el.textContent.replace(" ✓",""); },1200); } };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(selC(text,done)); else selC(text,done)(); }
+function selC(text,done){ return ()=>{ try { const t=document.createElement("textarea"); t.value=text; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove(); } catch(e){} done(); }; }
+
+async function main(){
+  for (const c of document.querySelectorAll("#chips .chip")) c.onclick = () => { const a=document.getElementById("amt"); if(a) a.value=c.getAttribute("data-amt"); };
+  const go = document.getElementById("go"); if (go) go.onclick = onGo;
+  const rt = document.getElementById("feeretry"); if (rt) rt.onclick = retryFee;
+  // a join link restores the whole ask (to/amt/count/period) — the link IS the handover, no wallet.
+  if (Q_TO && /^0x[0-9a-fA-F]{40}$/.test(Q_TO)){ const t=document.getElementById("to"); if(t) t.value=Q_TO; }
+  const qA=QS.get("amt"), qC=QS.get("count"), qP=QS.get("period");
+  if (qA && /^\d*\.?\d*$/.test(qA)){ const a=document.getElementById("amt"); if(a) a.value=qA; }
+  if (qC && /^\d+$/.test(qC)){ const c=document.getElementById("count"); if(c) c.value=qC; }
+  if (qP && /^\d+$/.test(qP)){ const p=document.getElementById("period"); if(p) p.value=qP; }
+  CHECKED = liveCheck();
+  const ok = await CHECKED; renderFee(); await renderHealth();
+  const st=document.getElementById("status");
+  // don't stomp a mandate the user already built (a fast click beats the async live check). The fee
+  // source is named here too, so a link-opened page never claims a live read it does not have.
+  if (st && Q_TO && document.getElementById("result").classList.contains("hide"))
+    st.textContent = "Link loaded for "+shortA(Q_TO)+". "+(ok?"Press Build to see the mandate."
+      : (LIVE.feeBps!=null ? "Factory read faulted — fee shown from the toll registry's live toll."
+                           : "Fee unreachable — press retry."));
+}
+
+if (typeof window!=="undefined") window.__sub = { CFG, SEL, SIGS, sig, keccak256, parseHuman, fmtUnits, approveCalldata, revokeCalldata, keeperCalldata, readStanding, paidThrough, feeOn, lapCostUsd, crossoverUsd, liveCheck, retryFee, tollKey, readTollBps, feeDisplay, LIVE, onGo, main, Q_TO, DEC, SYM, decOf, symOf };
+if (typeof globalThis!=="undefined") Object.assign(globalThis, { CFG, SEL, SIGS, sig, keccak256, approveCalldata, revokeCalldata, keeperCalldata, readStanding, paidThrough, feeOn, lapCostUsd, crossoverUsd, parseHuman, fmtUnits, tollKey, readTollBps, feeDisplay, DEC, SYM, decOf, symOf });
+if (typeof document!=="undefined" && document.getElementById) main();
+</script>
+
+<div class="dx-foot">
+  <div class="dx-foot-in">
+    <div class="dx-foot-brand"><a href="../index.html">← DEX fleet</a>
+      <span>truth-only · every number read on-chain</span></div>
+    <nav class="dx-foot-nav" aria-label="All pages"><a href="../subscribe/index.html">Subscriptions</a><a href="../merchant/index.html">For merchants</a><a href="../g2b-escrow/index.html">Escrow</a><a href="../g2a-streams/index.html">Streams</a><a href="../f1a-payment-links/index.html">Payment links</a><a href="../p2-forwarder/index.html">Forwarder</a><a href="../p3-router/index.html">Swap router</a><a href="../g4b-receipts/index.html">Receipts</a><a href="../g3a-sponsorship/index.html">Gasless</a><a href="../f1c-duster/index.html">Dust → USDC</a><a href="../miniapp/index.html">Pay in-feed</a><a href="../fleet-executor/index.html">Executor</a><a href="../status/index.html">Status</a><a href="../security/index.html">Security</a><a href="../changelog/index.html">Changelog</a></nav>
+  </div>
+</div>
+<!-- dx-timelock:start -->
+<div class="dx-timelock" id="dxTimelock" style="display:none;max-width:720px;margin:14px auto 0;padding:9px 12px;border:1px solid var(--line,#2a3550);border-radius:8px;font-size:12.5px;color:var(--mut,#8fa0be)"></div>
+<script>
+"use strict";
+(function () {
+  var el = document.getElementById("dxTimelock"); if (!el) return;
+  var ADDR = "0x4B05fA6aD0Ba0D0120Dce19Ce34dde6d1316C237", BAKED = 172800, RPC = "https://base-rpc.publicnode.com";
+  var SEL = "0x7aadef8b";
+  function hum(s) { var d = s / 86400; return (d % 1 === 0) ? (d + " day" + (d > 1 ? "s" : "")) : Math.round(s / 3600) + "h"; }
+  function paint(sec, live) {
+    if (!sec) return;
+    el.innerHTML = "<b>a fee change is STAGED, not instant</b> — the owner's raise or recipient change "
+      + "waits <b>" + hum(sec) + "</b> (the contract's TIMELOCK) before it can be committed"
+      + (live ? " — read live on-chain" : " — TIMELOCK " + hum(BAKED) + " baked, RPC unreachable") + ".";
+    el.style.display = "";
+  }
+  paint(BAKED, false);
+  try {
+    var ac = new AbortController(); var to = setTimeout(function () { ac.abort(); }, 8000);
+    fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, signal: ac.signal,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: ADDR, data: SEL }, "latest"] }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (j && j.result) paint(parseInt(j.result.slice(-16), 16), true); })
+      .catch(function () {})
+      .finally(function () { clearTimeout(to); });
+  } catch (e) {}
+})();
+</script>
+<!-- dx-timelock:end -->
+</body>
+</html>

@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<!--
+  FLEET EXECUTOR — the EIP-7702 batch delegate. ONE static file, NO server, NO build step, NO deps.
+  Hand-rolled ABI encode + keccak over raw eth_call, matching the lane's style (see p3-router/frontend,
+  g2b-escrow/frontend, f1c-duster/frontend for the same convention).
+
+  WHAT IT IS: an EIP-7702 delegate. A user EOA sets its own code to `0xef0100 ‖ address(delegate)` with
+  ONE type-4 authorization. From then on `address(this) == the user`, so a relayer can carry a whole
+  signed batch and the user stays the acting identity — the user's own code runs in the user's frame
+  while someone else pays gas. The batch is bound by an off-chain EIP-712 signature over the WHOLE
+  (target,value,data) array; ecrecover must equal address(this). Nothing is custodied between calls.
+
+  THE WHOLE POINT OF THIS PAGE: PROVE the address is the RIGHT delegate, and prove the #203 gate is
+  live — not by trusting the string (GOTCHAS #95/#73) but by (a) hashing the DEPLOYED runtime and
+  matching a pinned keccak of the source artifact, (b) DERIVING the EIP-712 domain in-page and matching
+  the live domain() read, and (c) running the gate probes as eth_calls and asserting the LIVE revert.
+
+  HONESTY RULES THIS PAGE FOLLOWS:
+   1. Identity is by BYTES and by BEHAVIOUR, never by look. A same-string impostor fails all three.
+   2. The #203 gate is stated PLAINLY, with its negative controls: the default 7821 door is gated
+      (self OR a valid intent), and the exact stranger+batch that fails the default SUCCEEDS on the
+      named opt-in `executeBare` and on the signed door. Not "reject strangers" — a real door split.
+   3. An unreadable chain is its OWN state ("unreachable"), never a silent 0 / false ok (GOTCHAS #27/#112).
+   4. Read-only: the whole page works with NO wallet. Nothing here is custodied. Install is a type-4
+      authorization the USER signs; this page only shows what that code looks like.
+
+  CONFIG via query: ?rpc=<url> overrides the RPC.
+-->
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet executor — EIP-7702 batch delegate (Base), proved live</title>
+<style>
+  /* palette UNIFIED with the landing (dex-site/index.html) so the whole site reads as one system */
+  :root { --bg:#05080f; --fg:#e9eefb; --mut:#8fa0be; --card:#0b1222; --line:#18233a;
+          --acc:#4d94ff; --ok:#34d399; --warn:#fbbf24; --bad:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .wrap { max-width:820px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:18px; margin:0 0 4px; letter-spacing:.5px; }
+  .sub { color:var(--mut); font-size:13px; margin-bottom:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin:14px 0; }
+  label { display:block; color:var(--mut); font-size:12px; text-transform:uppercase;
+          letter-spacing:.6px; margin:14px 0 6px; }
+  input, select { width:100%; background:#0e1116; color:var(--fg); border:1px solid var(--line);
+                  border-radius:8px; padding:10px 12px; font:inherit; }
+  input:focus, select:focus { outline:none; border-color:var(--acc); }
+  button { background:var(--acc); color:#06131f; border:0; border-radius:8px; padding:11px 16px;
+           font:inherit; font-weight:700; cursor:pointer; margin-top:16px; }
+  button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:default; }
+  .big { font-size:30px; font-weight:700; margin:6px 0; }
+  .addr { overflow-wrap:anywhere; background:#0e1116; border:1px solid var(--line);
+          border-radius:8px; padding:12px; margin-top:6px; font-size:13px; }
+  .badge { display:inline-block; font-size:11px; padding:3px 8px; border-radius:999px; white-space:nowrap;
+           border:1px solid var(--line); color:var(--mut); }
+  .badge.ok { color:var(--ok); border-color:var(--ok); }
+  .badge.warn { color:var(--warn); border-color:var(--warn); }
+  .badge.bad { color:var(--bad); border-color:var(--bad); }
+  a { color:var(--acc); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .mut { color:var(--mut); font-size:13px; }
+  details.how > summary { cursor:pointer; color:var(--fg); }
+  details.how > summary::marker { color:var(--acc); }
+  .howbody p { margin:12px 0 0; font-size:13px; color:var(--mut); line-height:1.6; }
+  .howbody b { color:var(--fg); }
+  .howbody i { color:var(--fg); font-style:normal; }
+  .err { color:var(--warn); }
+  .pos { color:var(--ok); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th { text-align:left; color:var(--mut); font-weight:400; font-size:11px; text-transform:uppercase;
+       letter-spacing:.5px; padding:6px; border-bottom:1px solid var(--line); }
+  td { text-align:left; padding:7px 6px; border-bottom:1px solid #191d24; overflow-wrap:anywhere; }
+  td.k { color:var(--mut); width:38%; }
+  pre { background:#0e1116; border:1px solid var(--line); border-radius:8px; padding:12px;
+        overflow-x:auto; font-size:12px; }
+  code { overflow-wrap:anywhere; }
+  .nav { margin-bottom:20px; font-size:13px; display:flex; justify-content:space-between; }
+  .kv { display:grid; grid-template-columns:150px minmax(0,1fr); gap:4px 12px; font-size:13px; }
+  .kv .k { color:var(--mut); }
+  ol.steps { margin:10px 0 0; padding-left:20px; }
+  ol.steps li { margin:8px 0; font-size:13px; }
+  ol.steps code { color:var(--fg); }
+</style>
+<link rel="stylesheet" href="../_assets/theme.css">
+<link rel="icon" type="image/svg+xml" href="../_assets/favicon.svg">
+</head>
+<body>
+<!-- dx-chrome --><style>
+/* dx-chrome — shared, namespaced. Injected by chrome.py; do not hand-edit in built files. */
+.dx-top{position:relative;z-index:50;background:rgba(5,8,15,.72);backdrop-filter:blur(8px);border-bottom:1px solid #18233a}
+.dx-top-in{max-width:900px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px}
+.dx-home{display:inline-flex;align-items:center;gap:7px;font:600 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color:#e9eefb;text-decoration:none;padding:6px 2px}
+.dx-home:hover{color:#4d94ff}
+.dx-home .dx-arrow{color:#4d94ff}
+.dx-tag{font:500 12.5px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be;margin-left:auto}
+.dx-foot{position:relative;z-index:50;margin-top:56px;border-top:1px solid #18233a;background:rgba(5,8,15,.72)}
+.dx-foot-in{max-width:900px;margin:0 auto;padding:24px 20px 40px}
+.dx-foot-brand{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+.dx-foot-brand a{font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;text-decoration:none}
+.dx-foot-brand a:hover{color:#4d94ff}
+.dx-foot-brand span{font:500 12.5px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be}
+.dx-foot-nav{display:flex;gap:9px;flex-wrap:wrap}
+.dx-foot-nav a{font:600 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;
+  text-decoration:none;background:rgba(255,255,255,.04);border:1px solid #18233a;border-radius:999px;padding:7px 13px}
+.dx-foot-nav a:hover{border-color:#4d94ff;color:#4d94ff}
+@media(max-width:600px){.dx-tag{display:none}}
+</style>
+<div class="dx-top">
+  <div class="dx-top-in">
+    <a class="dx-home" href="../index.html"><span class="dx-arrow">←</span> DEX fleet</a>
+    <span class="dx-tag">non-custodial rails on Base</span>
+  </div>
+</div>
+<div class="wrap">
+  <div class="nav">
+    <span><b>FLEET EXECUTOR</b> <span class="mut">→ EIP-7702 batch delegate</span></span>
+    <span class="mut" id="chainbadge">…</span>
+  </div>
+  <div id="app">loading…</div>
+  <p class="mut" style="margin-top:40px">
+    static page · reads the chain directly · no server, no account, no cookies ·
+    <span>Base mainnet (#8453) · read-only, nothing custodied</span>
+  </p>
+</div>
+
+<script src="../_assets/lib.js"></script>
+<script>
+"use strict";
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+
+
+// =============================== config =========================================================
+const PARAMS = new URLSearchParams(location.search);
+
+// The address is COPIED from DEPLOY-EVIDENCE.md (GOTCHA #73), never retyped. The page does NOT trust
+// the string: it hashes the DEPLOYED runtime and matches a pinned keccak OF THE SOURCE ARTIFACT — a
+// same-string impostor with different code fails on the first probe.
+const CHAIN_ID = 8453;
+const RPC_DEFAULT = "https://base-rpc.publicnode.com";   // endpoint; revert DATA comes back in error.data
+const DELEGATE  = "0x410396662089a26C801c54818CCd59640eFCaf77";
+const CODE_KECCAK = "0xfa2bdce24083f8cd236e6c53c575db81289421c4ea42398216ac286c825688f8";
+const CODE_LEN    = 5641;   // bytes; 24_576 is the EIP-170 ceiling
+const DOMAIN_PIN  = "0x4a990395015b5a7e177d380e1481cabb778c9f4a1c685d60eb27b68cc01fa547";
+// the EIP-712 domain of THIS delegate, re-DERIVED in-page below from first principles and asserted ==
+// the live domain() read. verifyingContract is address(this) == the user's own EOA (the whole point).
+// TWO teeth in prove() hold this pin to the derivation: (a) the DERIVED-match row and (b) a
+// PIN==DERIVED row. (a) ALONE was not enough — it compares the LIVE read to the derivation and never
+// touches the constant, so the page rendered a stale pin (the superseded 0x89437939 delegate's
+// 0xb050ba3e…) through a fully green proof sheet until 2026-11-12.
+
+// selectors are DERIVED from the signatures below (never typed), then asserted against the deployed code.
+const SIG = {
+  domain:      "domain()",
+  nonces:      "nonces()",
+  nonceOf:     "nonceOf(address)",
+  digest:      "digest((address,uint256,bytes)[],uint256,uint256)",
+  execute:     "execute((address,uint256,bytes)[],uint256,uint256,bytes)",   // the signed batch door
+  execute7821: "execute(bytes32,bytes)",                                     // the GATED default door
+  executeBare: "executeBare(bytes32,bytes)",                                 // the named opt-in raw door
+  executeSelf: "executeSelf((address,uint256,bytes)[])",
+};
+// error selectors, DERIVED, used to decode a live revert into a NAME (not a raw 4 bytes).
+const ERR = {
+  NotSelfOrIntent: "NotSelfOrIntent()",
+  NotSelf:         "NotSelf()",
+  BadNonce:        "BadNonce()",
+  BadSignature:    "BadSignature()",
+  UnsupportedMode: "UnsupportedMode(bytes32)",
+};
+
+// =============================== codec ==========================================================
+const word = (h) => String(h).padStart(64, "0");
+const pad32 = (v) => word(BigInt(v).toString(16));
+const addr32 = (a) => word(a.toLowerCase().replace(/^0x/, ""));
+const isAddr = (a) => /^0x[0-9a-fA-F]{40}$/.test(a || "");
+const short = (a) => (a ? a.slice(0, 6) + "…" + a.slice(-4) : "");
+const hexToBig = (h) => BigInt(h && h !== "0x" ? h : "0x0");
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---- keccak256 (Ethereum) in pure JS — matches the p3-router lane implementation -----------------
+
+const utf8Hex = (s) => bytesToHex(new TextEncoder().encode(s));
+const sig = (s) => keccak256(utf8Hex(s)).slice(0, 10);   // 4-byte selector from the signature
+const SEL = {}; for (const k of Object.keys(SIG)) SEL[k] = sig(SIG[k]);
+const ESEL = {}; for (const k of Object.keys(ERR)) ESEL[sig(ERR[k])] = ERR[k];   // selector -> ErrorName()
+
+// ---- EIP-712 domain, DERIVED in-page (mirrors the contract's _domain() exactly) ------------------
+const DOMAIN_TYPEHASH = keccak256(utf8Hex("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"));
+const NAME_HASH       = keccak256(utf8Hex("FleetExecutor"));
+const VERSION_HASH    = keccak256(utf8Hex("1"));
+// keccak(abi.encode(DOMAIN_TYPEHASH, NAME_HASH, VERSION_HASH, chainId, address(this))) — every field a
+// full 32-byte word, incl. the address right-padded.
+function deriveDomain() {
+  return keccak256(DOMAIN_TYPEHASH + NAME_HASH.slice(2) + VERSION_HASH.slice(2) + pad32(CHAIN_ID) + addr32(DELEGATE));
+}
+
+// ---- the options string for the DIGEST, so a reader can re-derive it with `cast` -----------------
+const CALL_TYPEHASH = keccak256(utf8Hex("Call(address target,uint256 value,bytes data)"));
+const EXECUTE_TYPEHASH = keccak256(utf8Hex(
+  "Execute(address authority,Call[] calls,uint256 nonce,uint256 deadline)" +
+  "Call(address target,uint256 value,bytes data)"));
+
+// minimal abi encoders used by the probes. `data` is bare hex (no 0x) — the inner payload's own bytes.
+function encExecute7821(mode, data) { return SEL.execute7821 + pad32(mode) + pad32(64n) + pad32(BigInt(data.length / 2)) + data; }
+function encBare7821(mode, data)    { return SEL.executeBare + pad32(mode) + pad32(64n) + pad32(BigInt(data.length / 2)) + data; }
+// mode 0x00 -> single (address,uint256,bytes): two static head words, then offset 0x60 to the bytes,
+// then len+data. `cd` is bare hex (no 0x).
+function encMode0Single(target, value, cd) {
+  return addr32(target) + pad32(value) + pad32(96n) + pad32(BigInt(cd.length / 2)) + cd;
+}
+const STRANGER = "0x000000000000000000000000000000000000dEaD";
+
+// =============================== rpc ============================================================
+const app = document.getElementById("app");
+const rpcUrl = PARAMS.get("rpc") || RPC_DEFAULT;
+
+async function rpc(method, params, tries = 3) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await _fetchT(rpcUrl, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      });
+      const j = await r.json();
+      if (j.error) { const e = new Error(j.error.message || "rpc error"); e.data = j.error.data; throw e; }
+      if (j.result === undefined) throw new Error(j.message || `rpc ${r.status} (no result)`);
+      return j.result;
+    } catch (e) { last = e; if (i < tries - 1) await new Promise((s) => setTimeout(s, 400 * (i + 1))); }
+  }
+  throw last;
+}
+async function ethCall(to, data, from) {
+  const c = { to, data }; if (from) c.from = from;
+  return rpc("eth_call", [c, "latest"]);
+}
+// decode a revert into a NAMED error if it is one of ours, else "revert: <0x…>".
+// The revert 4 bytes arrive in error.data (json-rpc), or inline in the message on some transports.
+function decodeRevert(e) {
+  const m = String((e && e.message) || e || "");
+  const data = (e && e.data) || "";
+  const dm = (data.match(/^0x[0-9a-fA-F]{8}/) || m.match(/0x[0-9a-fA-F]{8}/));
+  if (dm && ESEL[dm[0].toLowerCase()]) return ESEL[dm[0].toLowerCase()];
+  if (dm) return "revert " + dm[0].toLowerCase();
+  if (/revert/i.test(m)) return "revert(" + m.replace(/^.*revert:?\s*/i, "").trim() + ")";
+  return m;
+}
+
+// run eth_call, return {status:'ok'|'revert'|'unreachable', value, err}
+async function probe(to, data, from) {
+  try {
+    return { status: "ok", value: await ethCall(to, data, from) };
+  } catch (e) {
+    const m = String((e && e.message) || e);
+    if (/revert/i.test(m) || (e && e.data)) return { status: "revert", err: decodeRevert(e) };
+    return { status: "unreachable", err: m };
+  }
+}
+
+// =============================== the proof ======================================================
+// Identity is by BYTES then by BEHAVIOUR. Every returned verdict is falsifiable by hand (re-derive the
+// keccak/domain/selector with `cast`), and a same-string impostor fails the byte probe first.
+async function prove() {
+  const out = { rows: [], verdict: "proving", problems: [] };
+  const push = (name, got, want, status) => { out.rows.push({ name, got, want, status }); };
+
+  // ── 1. BYTES: the deployed runtime must hash to the pinned keccak ──────────────────────────────
+  let code;
+  try { code = await rpc("eth_getCode", [DELEGATE, "latest"]); }
+  catch (e) { out.verdict = "unreachable"; out.problems.push("rpc " + String(e.message || e)); return out; }
+  const bytes = (code.length - 2) / 2;
+  const liveKeccak = keccak256(code);
+  const is8219 = code.slice(0, 10).toLowerCase() === "0xef0100";   // a *delegation designator*, not impl code
+  push("runtime size", bytes + " B", CODE_LEN + " B", bytes === CODE_LEN ? "ok" : "bad");
+  push("runtime keccak", liveKeccak, CODE_KECCAK, liveKeccak.toLowerCase() === CODE_KECCAK.toLowerCase() ? "ok" : "bad");
+  if (bytes !== CODE_LEN) out.problems.push("size " + bytes + " ≠ " + CODE_LEN);
+  if (liveKeccak.toLowerCase() !== CODE_KECCAK.toLowerCase()) out.problems.push("code keccak ≠ pinned");
+  out.is8219 = is8219;
+
+  // ── 2. BEHAVIOUR: domain() must equal the DERIVED domain (binds chainId + address(this)) ───────
+  const dWant = deriveDomain();
+  const dRes = await probe(DELEGATE, SEL.domain);
+  if (dRes.status === "ok") push("domain() — DERIVED match", dRes.value, dWant, dRes.value.toLowerCase() === dWant.toLowerCase() ? "ok" : "bad");
+  else push("domain()", dRes.status, "an answer", dRes.status === "unreachable" ? "warn" : "bad");
+  if (dRes.status === "ok" && dRes.value.toLowerCase() !== dWant.toLowerCase()) out.problems.push("domain() ≠ derived");
+  if (dRes.status !== "ok") out.problems.push("domain() " + dRes.status);
+  // 2b. the CONSTANT itself must equal the derivation. Row 2 proves the chain answers correctly but
+  //     never reads DOMAIN_PIN, so a stale pin survived a green sheet (see the const's comment).
+  push("domain pin == DERIVED", DOMAIN_PIN, dWant, DOMAIN_PIN.toLowerCase() === dWant.toLowerCase() ? "ok" : "bad");
+  if (DOMAIN_PIN.toLowerCase() !== dWant.toLowerCase()) out.problems.push("STALE DOMAIN_PIN ≠ derived");
+
+  // ── 3. BEHAVIOUR: the #203 gate, LIVE. stranger -> gated default door must REVERT NotSelfOrIntent;
+  //        the SAME stranger must SUCCEED on executeBare; self must SUCCEED on the gated door. ────────
+  const mode = 0n;
+  const inner = encMode0Single(STRANGER, 0n, "");       // (address,uint256,bytes) with empty data
+  const gate = encExecute7821(mode, inner);
+  const bare = encBare7821(mode, inner);  const gStranger = await probe(DELEGATE, gate, STRANGER);
+  const gBare     = await probe(DELEGATE, bare, STRANGER);
+  const gSelf     = await probe(DELEGATE, gate, DELEGATE);
+  push("gate: stranger → execute(bytes32,bytes)", gStranger.status === "revert" ? gStranger.err : gStranger.status,
+       "revert NotSelfOrIntent()", (gStranger.status === "revert" && /NotSelfOrIntent/.test(gStranger.err)) ? "ok" : "bad");
+  push("NC: stranger → executeBare(...)", gBare.status, "ok", gBare.status === "ok" ? "ok" : "bad");
+  push("NC: self → execute(bytes32,bytes)", gSelf.status, "ok", gSelf.status === "ok" ? "ok" : "bad");
+  if (!(gStranger.status === "revert" && /NotSelfOrIntent/.test(gStranger.err))) out.problems.push("the #203 gate did not fire as documented");
+  if (gBare.status !== "ok") out.problems.push("executeBare not permissionless on the live contract");
+  if (gSelf.status !== "ok") out.problems.push("self path not open on the live contract");
+
+  // ── 4. nonces() live read (state; informational) ───────────────────────────────────────────────
+  const nRes = await probe(DELEGATE, SEL.nonces);
+  out.nonces = nRes.status === "ok" ? hexToBig(nRes.value).toString() : nRes.status;
+
+  out.verdict = out.problems.length ? "not-proved" : "proved";
+  return out;
+}
+
+// =============================== view ===========================================================
+async function viewHome() {
+  document.getElementById("chainbadge").innerHTML =
+    `<span class="badge warn">Base mainnet #${CHAIN_ID}</span>`;
+
+  app.innerHTML = `
+    <h1>Fleet executor <span class="mut">— EIP-7702 batch delegate</span></h1>
+    <div class="sub">One installed delegate drives every fleet surface from a single off-chain EIP-712
+      signature over a whole signed batch of (target,value,data). The user's own code runs in the user's
+      frame; any relayer can carry it. Non-custodial, unowned, non-upgradeable.
+      <a href="./DEPLOY-EVIDENCE.md">deploy evidence ↗</a></div>
+
+    <div class="card">
+      <div class="row"><b>the delegate</b><span class="badge" id="vbadge">…</span></div>
+      <div class="addr" id="addrline">${esc(DELEGATE)}</div>
+      <p class="mut" style="margin:8px 0 0">Chain <b>#${CHAIN_ID}</b> · deployed and proven live. Copy the
+        address from the record; this page proves it by <b>hashing the runtime</b> and matching a pinned
+        keccak of the source artifact — a same-string impostor fails on the first probe
+        (<span class="mut">GOTCHAS #95/#73</span>). This page is <b>read-only — nothing custodied</b>;
+        the install is a type-4 authorization the user signs.</p>
+      <div class="row" style="margin-top:10px">
+        <a href="https://basescan.org/address/${esc(DELEGATE)}" target="_blank" rel="noopener">BaseScan ↗</a>
+        <span class="mut">· verb <code>execute(calls, nonce, deadline, sig)</code></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>live proof</b><span class="mut">— bytes first, then behaviour · no wallet</span></div>
+      <table><thead><tr><th>probe</th><th>read</th><th>expect</th><th></th></tr></thead>
+        <tbody id="proofrows"><tr><td colspan="4" class="mut">reading chain…</td></tr></tbody></table>
+      <p class="mut" style="margin-top:10px">Identity is by <b>bytes</b> (keccak of the deployed runtime vs
+        the pinned artifact) and by <b>behaviour</b> (the EIP-712 <code>domain()</code> must equal the
+        domain DERIVED in-page, binding chainId ${CHAIN_ID} and <code>address(this)</code>). An unreachable
+        chain renders <b>unreachable</b>, never a silent 0 (<span class="mut">GOTCHAS #27/#112</span>).</p>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>the #203 gate</b><span class="badge warn">the door that changed</span></div>
+      <p class="mut" style="margin:10px 0 0">The bare ERC-7821 entry <code>execute(bytes32,bytes)</code>
+        carries <b>no</b> built-in auth, so on a 7702 EOA it is a permissionless remote-exec: a stranger
+        can make the EOA <code>approve(stranger, MAX)</code> then drain its ERC-20s with zero signature.
+        So the <b>default</b> door is now <b>gated</b>: it requires <code>msg.sender == address(this)</code>
+        (self) <b>OR</b> a valid EIP-712 intent supplied through the 5-arg overload. The old
+        always-permissionless behaviour survives as the <b>named opt-in</b> <code>executeBare</code>.</p>
+      <div class="kv" style="margin-top:12px">
+        <div class="k">default <code>execute(bytes32,bytes)</code></div><div><b>gated</b> — self OR a valid intent; <code>NotSelfOrIntent</code> otherwise</div>
+        <div class="k">opt-in <code>executeBare(bytes32,bytes)</code></div><div><b>permissionless</b> — the raw 7821 door, named</div>
+        <div class="k">signed <code>execute(Call[],nonce,deadline,sig)</code></div><div>EIP-712 <code>ecrecover == address(this)</code>; nonce-guarded</div>
+      </div>
+      <p class="mut" style="margin-top:10px">The rows above run this as a <b>live</b> probe: the same
+        stranger+batch that <b>fails</b> the gated default <b>succeeds</b> on <code>executeBare</code> and
+        on the self path — so the gate is a real door split, not "reject strangers". The selector
+        <code>${esc(SEL.execute7821)}</code> is the STANDARD ERC-7821 selector and the only entry whose
+        behaviour changed; a consumer that relied on the old bare default must pass an intent or call
+        <code>executeBare</code>.</p>
+    </div>
+
+    <details class="card how" open>
+      <summary><b>how to install it</b> <span class="mut">— one type-4 authorization, signed by the USER</span></summary>
+      <div class="howbody">
+        <ol class="steps">
+          <li>The user signs ONE <b>EIP-7702 authorization</b> naming this delegate (chain ${CHAIN_ID},
+            nonce = the user's current nonce). Their EOA then sets its own code to the designator:</li>
+        </ol>
+        <div class="addr">0xef0100 ‖ ${esc(DELEGATE.slice(2))}</div>
+        <p class="mut" style="margin-top:6px">After that <code>address(this) == the user</code>, so this
+          delegate's code runs <b>in the user's own frame</b> — the user stays the acting identity, and a
+          relayer can submit the tx and pay the gas.</p>
+        <ol class="steps" start="2">
+          <li>To act, the user signs an off-chain <b>EIP-712</b> batch (domain below).</li>
+          <li>Any relayer calls <code>execute(calls, nonce, deadline, sig)</code>; the contract recovers
+            the signer and requires <code>ecrecover == address(this) == the user</code>.</li>
+        </ol>
+        <label>EIP-712 domain (verifyingContract = address(this) = the user's EOA)</label>
+        <div class="addr" id="domainline">…</div>
+        <p class="mut" style="margin-top:6px">name <code>FleetExecutor</code> · version <code>1</code> ·
+          chainId <code>${CHAIN_ID}</code> · verifyingContract = the delegating EOA. The live
+          <code>domain()</code> read is asserted equal to the in-page derivation above.</p>
+        <details style="margin-top:8px"><summary class="mut">the signed-batch machinery, in full</summary>
+          <div class="mut" style="margin-top:8px; font-size:12.5px">
+            <p><b>Execute</b>(address authority, Call[] calls, uint256 nonce, uint256 deadline) — signed;
+              <b>Call</b>(address target, uint256 value, bytes data) — referenced type.</p>
+            <p><code>authority</code> is <code>address(this)</code>, so the signature is bound to the
+              account and cannot be replayed onto another EOA. Per-account nonce lives in a namespaced
+              slot <code>keccak256("FleetExecutor.nonce")</code> salted by the account, strictly
+              increasing (<code>nonce &gt; nonce()</code>). Value paths are <code>nonReentrant</code> and
+              <code>msg.value &gt;= Σ calls.value</code> is enforced.</p>
+            <p>typehashes (DERIVED in-page, reproducible with <code>cast keccak</code>):</p>
+            <div class="addr" style="font-size:11.5px">Call: ${esc(CALL_TYPEHASH)}<br>Execute: ${esc(EXECUTE_TYPEHASH)}</div>
+          </div>
+        </details>
+      </div>
+    </details>
+
+    <details class="card how">
+      <summary><b>what it does and does not do</b> <span class="mut">— the honest edges</span></summary>
+      <div class="howbody">
+        <p><b>What it does.</b> Runs an ordered batch of (target,value,data) in the user's frame, authorised
+          by one off-chain signature. The user can self-call (<code>executeSelf</code>) with no signature,
+          or be carried by any relayer via the signed path. It is the generalised union of the sibling
+          forwards (g3a <code>SponsorTarget</code> + p3c <code>P3cDelegate</code>), widened from "forward
+          one call" to "run a signed batch".</p>
+        <p><b>What it does not do.</b> It holds no tokens between calls and keeps no state but the nonce
+          and the reentrancy lock. It is <b>unowned</b> — no admin, no upgrade, no <code>selfdestruct</code>;
+          a change is a redeploy. It does not choose targets: the batch is a caller input, so a bad signer
+          is the only trust. It cannot know how its tx was submitted, so "sponsored" means a relayer paid,
+          not "private".</p>
+        <p><b>The install is reversible.</b> A 7702 authorization expires (nonce) and can be replaced by a
+          newer one; the designator points at this delegate's address, so a byte-different address is a
+          different contract — hence the byte proof above.</p>
+      </div>
+    </details>
+
+    <div class="card">
+      <div class="row"><b>honest accounting</b><span class="badge">REALIZED ≠ ARMED</span></div>
+      <div class="kv" style="margin-top:12px">
+        <div class="k">REALIZED</div><div><b>$0.00</b> — this is infrastructure; it takes no fee itself</div>
+        <div class="k">ARMED</div><div>the lanes it drives once a user installs it and a batch flows</div>
+        <div class="k">delegate native</div><div id="bal">—</div>
+      </div>
+      <p class="mut" style="margin-top:10px"><b>$0 until live flow.</b> The delegate is deployed and proved;
+        it is a rail, so its own revenue is whatever the batch it carries touches.</p>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>runbook</b><span class="mut">— reproduce every probe by hand</span></div>
+      <pre>cast code  ${esc(DELEGATE)} --rpc-url ${esc(rpcUrl)} | wc -c           # ${CODE_LEN} bytes +0x
+cast keccak $(cast code ${esc(DELEGATE)} --rpc-url ${esc(rpcUrl)})       # == ${esc(CODE_KECCAK)}
+cast call  ${esc(DELEGATE)} "domain()(bytes32)" --rpc-url ${esc(rpcUrl)}  # == ${esc(DOMAIN_PIN)}
+# gate: stranger on the default door REVERTS; on executeBare it succeeds
+cast calldata "execute(bytes32,bytes)" 0x00 $(cast abi-encode "f(address,uint256,bytes)" ${esc(STRANGER)} 0 0x)</pre>
+      <p class="mut" style="margin-top:8px">selectors (DERIVED, not typed): <code>execute(bytes32,bytes)</code>
+        = <code>${esc(SEL.execute7821)}</code> · <code>executeBare(bytes32,bytes)</code> =
+        <code>${esc(SEL.executeBare)}</code> · <code>domain()</code> = <code>${esc(SEL.domain)}</code>.
+        Current <code>nonces()</code> on the delegate: <span id="nonces">…</span>.</p>
+    </div>`;
+
+  const rowsEl = document.getElementById("proofrows");
+  const res = await prove();
+  const cls = (s) => s === "ok" ? "ok" : s === "warn" ? "warn" : "bad";
+  rowsEl.innerHTML = res.rows.map((r) => `<tr>
+      <td class="k">${esc(r.name)}</td>
+      <td>${esc(String(r.got))}</td>
+      <td>${esc(String(r.want))}</td>
+      <td><span class="badge ${cls(r.status)}">${r.status === "ok" ? "match" : r.status === "warn" ? "fault" : "FAIL"}</span></td>
+    </tr>`).join("");
+
+  const b = document.getElementById("vbadge");
+  if (res.verdict === "proved") b.innerHTML = `<span class="badge ok">proved live — bytes + behaviour</span>`;
+  else if (res.verdict === "unreachable") b.innerHTML = `<span class="badge warn">unreachable — ${esc(res.problems[0] || "rpc")}</span>`;
+  else b.innerHTML = `<span class="badge bad">NOT proved — ${esc(res.problems[0] || "")}</span>`;
+
+  document.getElementById("domainline").textContent = DOMAIN_PIN;
+  document.getElementById("nonces").textContent = res.nonces;
+  try { document.getElementById("bal").textContent = hexToBig(await rpc("eth_getBalance", [DELEGATE, "latest"])).toString() + " wei"; }
+  catch { document.getElementById("bal").innerHTML = "<span class='err'>unreachable</span>"; }
+}
+
+// =============================== boot ===========================================================
+(function boot() { viewHome(); })();
+
+// expose for a verify / e2e harness
+globalThis.DELEGATE = DELEGATE; globalThis.CODE_KECCAK = CODE_KECCAK; globalThis.CODE_LEN = CODE_LEN;
+globalThis.DOMAIN_PIN = DOMAIN_PIN; globalThis.DOMAIN_TYPEHASH = DOMAIN_TYPEHASH;
+globalThis.SEL = SEL; globalThis.SIG = SIG; globalThis.ERR = ERR; globalThis.ESEL = ESEL;
+globalThis.sig = sig; globalThis.keccak256 = keccak256; globalThis.utf8Hex = utf8Hex;
+globalThis.deriveDomain = deriveDomain; globalThis.decodeRevert = decodeRevert;
+globalThis.encExecute7821 = encExecute7821; globalThis.encBare7821 = encBare7821;
+globalThis.encMode0Single = encMode0Single; globalThis.probe = probe; globalThis.prove = prove;
+globalThis.viewHome = viewHome; globalThis.pad32 = pad32; globalThis.addr32 = addr32;
+globalThis.CHAIN_ID = CHAIN_ID;
+</script>
+
+<div class="dx-foot">
+  <div class="dx-foot-in">
+    <div class="dx-foot-brand"><a href="../index.html">← DEX fleet</a>
+      <span>truth-only · every number read on-chain</span></div>
+    <nav class="dx-foot-nav" aria-label="All pages"><a href="../subscribe/index.html">Subscriptions</a><a href="../merchant/index.html">For merchants</a><a href="../g2b-escrow/index.html">Escrow</a><a href="../g2a-streams/index.html">Streams</a><a href="../f1a-payment-links/index.html">Payment links</a><a href="../p2-forwarder/index.html">Forwarder</a><a href="../p3-router/index.html">Swap router</a><a href="../g4b-receipts/index.html">Receipts</a><a href="../g3a-sponsorship/index.html">Gasless</a><a href="../f1c-duster/index.html">Dust → USDC</a><a href="../miniapp/index.html">Pay in-feed</a><a href="../fleet-executor/index.html">Executor</a><a href="../status/index.html">Status</a><a href="../security/index.html">Security</a><a href="../changelog/index.html">Changelog</a></nav>
+  </div>
+</div>
+</body>
+</html>

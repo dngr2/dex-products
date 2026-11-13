@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<!--
+  G2-b — escrow-as-a-service. ONE static file, NO server, NO build step, NO third-party deps.
+  Hand-rolled ABI encode/decode over raw eth_call / eth_sendTransaction, matching the lane's style
+  (see f1c-duster/frontend and p2-forwarder/frontend for the same convention).
+
+  WHAT IT DOES: lock a token amount against a hashlock and/or a nominated arbiter, share a link to
+  the escrow address, and let the counterparty release it by pasting the preimage — or refund the
+  payer after the timeout. Funds sit in the ESCROW contract, never in this page or a server.
+
+  HONESTY RULES THIS PAGE FOLLOWS:
+   1. The FEE is stated up front (read live from the factory's feeBps() — on a RELEASE only, nothing
+      on a refund), so a future re-rate never dates this page. Dust-safe (floors).
+   2. The TRUST MODEL is printed per escrow, not implied: hashlock = trustless; arbiter = nominated
+      trust ("you chose them"). The page never calls an arbiter escrow "trustless".
+   3. The PREIMAGE is shown as the counterparty's key, and the page computes keccak(preimage) locally
+      (pure JS, vector-verified) so the creator sees EXACTLY what hash they will lock — no trust that
+      a server hashed it right.
+   4. The refund is shown as the payer's protection, with the DEADLINE in absolute terms and a
+      live "on the real clock" note.
+   5. Read-only: pasting an address or opening a shared link works with NO wallet; the escrow's whole
+      state is read from the chain.
+
+  ROUTES (hash-routed so file:// works):  #/  -> the create form   #/?e=0x..  -> view one escrow
+  CONFIG via query: ?rpc=<url>  ?chain=base|base_sepolia  ?factory=0x..
+-->
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>escrow — lock a trade safe on Base</title>
+<style>
+  /* palette UNIFIED with the landing (dex-site/index.html) so the whole site reads as one system */
+  :root { --bg:#05080f; --fg:#e9eefb; --mut:#8fa0be; --card:#0b1222; --line:#18233a;
+          --acc:#4d94ff; --ok:#34d399; --warn:#fbbf24; --bad:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .wrap { max-width:760px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:18px; margin:0 0 4px; letter-spacing:.5px; }
+  .sub { color:var(--mut); font-size:13px; margin-bottom:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin:14px 0; }
+  label { display:block; color:var(--mut); font-size:12px; text-transform:uppercase;
+          letter-spacing:.6px; margin:14px 0 6px; }
+  input, select { width:100%; background:#0e1116; color:var(--fg); border:1px solid var(--line);
+                  border-radius:8px; padding:10px 12px; font:inherit; }
+  input:focus, select:focus { outline:none; border-color:var(--acc); }
+  button { background:var(--acc); color:#06131f; border:0; border-radius:8px; padding:11px 16px;
+           font:inherit; font-weight:700; cursor:pointer; margin-top:16px; }
+  button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:default; }
+  .big { font-size:30px; font-weight:700; margin:6px 0; }
+  .addr { overflow-wrap:anywhere; background:#0e1116; border:1px solid var(--line);
+          border-radius:8px; padding:12px; margin-top:6px; font-size:13px; }
+  .badge { display:inline-block; font-size:11px; padding:3px 8px; border-radius:999px;
+           border:1px solid var(--line); color:var(--mut); }
+  .badge.ok { color:var(--ok); border-color:var(--ok); }
+  .badge.warn { color:var(--warn); border-color:var(--warn); }
+  .badge.bad { color:var(--bad); border-color:var(--bad); }
+  a { color:var(--acc); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .mut { color:var(--mut); font-size:13px; }
+  details.how > summary { cursor:pointer; color:var(--fg); }
+  details.how > summary::marker { color:var(--acc); }
+  .howbody p { margin:12px 0 0; font-size:13px; color:var(--mut); line-height:1.6; }
+  .howbody b { color:var(--fg); }
+  .howbody i { color:var(--fg); font-style:normal; }
+  .err { color:var(--warn); }
+  .pos { color:var(--ok); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th { text-align:left; color:var(--mut); font-weight:400; font-size:11px; text-transform:uppercase;
+       letter-spacing:.5px; padding:6px; border-bottom:1px solid var(--line); }
+  td { text-align:left; padding:7px 6px; border-bottom:1px solid #191d24; overflow-wrap:anywhere; }
+  td.k { color:var(--mut); width:38%; }
+  pre { background:#0e1116; border:1px solid var(--line); border-radius:8px; padding:12px;
+        overflow-x:auto; font-size:12px; }
+  .nav { margin-bottom:20px; font-size:13px; display:flex; justify-content:space-between; }
+  .kv { display:grid; grid-template-columns:140px minmax(0,1fr); gap:4px 12px; font-size:13px; }
+  .kv .k { color:var(--mut); }
+</style>
+<link rel="stylesheet" href="../_assets/theme.css">
+<link rel="icon" type="image/svg+xml" href="../_assets/favicon.svg">
+</head>
+<body>
+<!-- dx-chrome --><style>
+/* dx-chrome — shared, namespaced. Injected by chrome.py; do not hand-edit in built files. */
+.dx-top{position:relative;z-index:50;background:rgba(5,8,15,.72);backdrop-filter:blur(8px);border-bottom:1px solid #18233a}
+.dx-top-in{max-width:900px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px}
+.dx-home{display:inline-flex;align-items:center;gap:7px;font:600 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color:#e9eefb;text-decoration:none;padding:6px 2px}
+.dx-home:hover{color:#4d94ff}
+.dx-home .dx-arrow{color:#4d94ff}
+.dx-tag{font:500 12.5px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be;margin-left:auto}
+.dx-foot{position:relative;z-index:50;margin-top:56px;border-top:1px solid #18233a;background:rgba(5,8,15,.72)}
+.dx-foot-in{max-width:900px;margin:0 auto;padding:24px 20px 40px}
+.dx-foot-brand{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+.dx-foot-brand a{font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;text-decoration:none}
+.dx-foot-brand a:hover{color:#4d94ff}
+.dx-foot-brand span{font:500 12.5px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be}
+.dx-foot-nav{display:flex;gap:9px;flex-wrap:wrap}
+.dx-foot-nav a{font:600 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;
+  text-decoration:none;background:rgba(255,255,255,.04);border:1px solid #18233a;border-radius:999px;padding:7px 13px}
+.dx-foot-nav a:hover{border-color:#4d94ff;color:#4d94ff}
+@media(max-width:600px){.dx-tag{display:none}}
+</style>
+<div class="dx-top">
+  <div class="dx-top-in">
+    <a class="dx-home" href="../index.html"><span class="dx-arrow">←</span> DEX fleet</a>
+    <span class="dx-tag">non-custodial rails on Base</span>
+  </div>
+</div>
+<div class="wrap">
+  <div class="nav">
+    <span><b>escrow</b> <span class="mut">→ lock a trade safe on Base</span></span>
+    <span class="mut" id="chainbadge">…</span>
+  </div>
+  <div id="app">loading…</div>
+  <p class="mut" style="margin-top:40px">
+    static page · reads the chain directly · no server, no account, no cookies ·
+    <span id="feenote">fee read live on release, nothing on refund</span>
+    <span class="chip" id="feeretry" title="re-read the chain" style="cursor:pointer">retry</span>
+  </p>
+</div>
+
+<!-- ── inline QR ─────────────────────────────────────────────────────────────────────
+     Byte-mode, ECC-L, versions 1–10, ZERO deps. The matrices are bit-exact against a
+     reference encoder (143 cases: forced masks, all versions, 120-payload fuzz) and
+     independently decode-verified (rendered → PNG → decoded). Renders to <canvas>.
+     Usage:  qrHTML(text, px)  -> canvas markup;  call drawQRs() after inserting it.
+──────────────────────────────────────────────────────────────────────────────────── -->
+<script src="../_assets/lib.js"></script>
+<script>
+(function (G) {
+  "use strict";
+  // GF(256), primitive 0x11d — Reed–Solomon over the QR field
+  var EXP = new Array(256), LOG = new Array(256);
+  (function () { var x = 1; for (var i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 0x100) x ^= 0x11d; } EXP[255] = EXP[0]; })();
+  function gmul(a, b) { return (a === 0 || b === 0) ? 0 : EXP[(LOG[a] + LOG[b]) % 255]; }
+  function rsGen(n) { var p = [1]; for (var i = 0; i < n; i++) { var r = new Array(p.length + 1).fill(0); for (var j = 0; j < p.length; j++) { r[j] ^= gmul(p[j], 1); r[j + 1] ^= gmul(p[j], EXP[i]); } p = r; } return p; }
+  function rsEcc(data, n) { var gen = rsGen(n), res = data.concat(new Array(n).fill(0)); for (var i = 0; i < data.length; i++) { var c = res[i]; if (c !== 0) for (var j = 1; j < gen.length; j++) res[i + j] ^= gmul(gen[j], c); } return res.slice(data.length); }
+
+  // per-version Reed–Solomon block structure, ECC-L only: [count, totalCw, dataCw]
+  var RS = { 1: [[1, 26, 19]], 2: [[1, 44, 34]], 3: [[1, 70, 55]], 4: [[1, 100, 80]], 5: [[1, 134, 108]],
+    6: [[2, 86, 68]], 7: [[2, 98, 78]], 8: [[2, 121, 97]], 9: [[2, 146, 116]], 10: [[2, 86, 68], [2, 87, 69]] };
+  var ALIGN = { 1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34], 7: [6, 22, 38], 8: [6, 24, 42], 9: [6, 26, 46], 10: [6, 28, 50] };
+  function dataCw(v) { var n = 0; RS[v].forEach(function (b) { n += b[0] * b[2]; }); return n; }
+  function byteCap(v) { return Math.floor((dataCw(v) * 8 - 4 - (v < 10 ? 8 : 16)) / 8); }
+
+  function bchDigit(x) { var d = 0; while (x !== 0) { d++; x >>>= 1; } return d; }
+  function formatBits(ecl, mask) { var data = (ecl << 3) | mask, d = data << 10; while (bchDigit(d) - bchDigit(0x537) >= 0) d ^= 0x537 << (bchDigit(d) - bchDigit(0x537)); return ((data << 10) | d) ^ 0x5412; }
+  function versionBits(v) { var d = v << 12; while (bchDigit(d) - bchDigit(0x1f25) >= 0) d ^= 0x1f25 << (bchDigit(d) - bchDigit(0x1f25)); return (v << 12) | d; }
+
+  function chooseVersion(n) { for (var v = 1; v <= 10; v++) if (n <= byteCap(v)) return v; throw new Error("qr: too long (" + n + " bytes)"); }
+
+  function codewords(text, version) {
+    var bytes = Array.prototype.slice.call(new TextEncoder().encode(text)), bits = [];
+    function put(val, len) { for (var i = len - 1; i >= 0; i--) bits.push((val >>> i) & 1); }
+    put(4, 4); put(bytes.length, version < 10 ? 8 : 16); bytes.forEach(function (c) { put(c, 8); });
+    var total = dataCw(version), cap = total * 8;
+    for (var i = 0; i < 4 && bits.length < cap; i++) bits.push(0);
+    while (bits.length % 8 !== 0) bits.push(0);
+    var data = []; for (var k = 0; k < bits.length; k += 8) { var x = 0; for (var j = 0; j < 8; j++) x = (x << 1) | bits[k + j]; data.push(x); }
+    var pad = [0xEC, 0x11], pi = 0; while (data.length < total) data.push(pad[pi++ % 2]);
+    var blocks = [], off = 0;
+    RS[version].forEach(function (blk) { for (var i = 0; i < blk[0]; i++) { var dd = data.slice(off, off + blk[2]); off += blk[2]; blocks.push({ d: dd, e: rsEcc(dd, blk[1] - blk[2]) }); } });
+    var out = [], maxD = Math.max.apply(null, blocks.map(function (b) { return b.d.length; }));
+    for (var i2 = 0; i2 < maxD; i2++) blocks.forEach(function (b) { if (i2 < b.d.length) out.push(b.d[i2]); });
+    var maxE = Math.max.apply(null, blocks.map(function (b) { return b.e.length; }));
+    for (var i3 = 0; i3 < maxE; i3++) blocks.forEach(function (b) { if (i3 < b.e.length) out.push(b.e[i3]); });
+    return out;
+  }
+
+  function blank(s) { var m = []; for (var i = 0; i < s; i++) m.push(new Array(s).fill(null)); return m; }
+  function finder(m, r, c) { for (var dr = -1; dr <= 7; dr++) for (var dc = -1; dc <= 7; dc++) { var rr = r + dr, cc = c + dc; if (rr < 0 || cc < 0 || rr >= m.length || cc >= m.length) continue; var on = (dr >= 0 && dr <= 6 && (dc === 0 || dc === 6)) || (dc >= 0 && dc <= 6 && (dr === 0 || dr === 6)) || (dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4); m[rr][cc] = on ? 1 : 0; } }
+  function align(m, cx, cy) { for (var dr = -2; dr <= 2; dr++) for (var dc = -2; dc <= 2; dc++) m[cy + dr][cx + dc] = (Math.max(Math.abs(dr), Math.abs(dc)) !== 1) ? 1 : 0; }
+  function reserved(s, version) {
+    var rm = blank(s).map(function (r) { return r.map(function () { return false; }); });
+    function mark(r, c, dim) { for (var dr = 0; dr < dim; dr++) for (var dc = 0; dc < dim; dc++) { var rr = r + dr, cc = c + dc; if (rr >= 0 && cc >= 0 && rr < s && cc < s) rm[rr][cc] = true; } }
+    mark(-1, -1, 9); mark(-1, s - 8, 9); mark(s - 8, -1, 9);
+    for (var i = 0; i < s; i++) { rm[6][i] = true; rm[i][6] = true; }
+    ALIGN[version].forEach(function (cy) { ALIGN[version].forEach(function (cx) { if ((cx === 6 && cy === 6) || (cx === 6 && cy === s - 7) || (cx === s - 7 && cy === 6)) return; mark(cy - 2, cx - 2, 5); }); });
+    for (var a = 0; a < 9; a++) { rm[8][a] = true; rm[a][8] = true; }
+    for (var b = 0; b < 8; b++) { rm[8][s - 1 - b] = true; rm[s - 1 - b][8] = true; }
+    rm[s - 8][8] = true;
+    if (version >= 7) for (var p = 0; p < 6; p++) for (var q = 0; q < 3; q++) { rm[s - 11 + q][p] = true; rm[p][s - 11 + q] = true; }
+    return rm;
+  }
+  function functions(m, version) {
+    var s = m.length;
+    finder(m, 0, 0); finder(m, 0, s - 7); finder(m, s - 7, 0);
+    for (var i = 8; i < s - 8; i++) { if (m[6][i] === null) m[6][i] = i % 2 === 0 ? 1 : 0; if (m[i][6] === null) m[i][6] = i % 2 === 0 ? 1 : 0; }
+    ALIGN[version].forEach(function (cy) { ALIGN[version].forEach(function (cx) { if ((cx === 6 && cy === 6) || (cx === 6 && cy === s - 7) || (cx === s - 7 && cy === 6)) return; align(m, cx, cy); }); });
+    for (var a = 0; a < 9; a++) { if (m[8][a] === null) m[8][a] = 0; if (m[a][8] === null) m[a][8] = 0; }
+    for (var b = 0; b < 8; b++) { if (m[8][s - 1 - b] === null) m[8][s - 1 - b] = 0; if (m[s - 1 - b][8] === null) m[s - 1 - b][8] = 0; }
+    m[s - 8][8] = 1;
+    if (version >= 7) { var vb = versionBits(version); for (var k = 0; k < 18; k++) { var bit = (vb >>> k) & 1, aa = Math.floor(k / 3), bb = k % 3; m[s - 11 + bb][aa] = bit; m[aa][s - 11 + bb] = bit; } }
+  }
+  function placeData(m, cw) {
+    var s = m.length, dir = -1, row = s - 1, col = s - 1, idx = 0, total = cw.length * 8;
+    function bitAt(i) { return i < total ? (cw[i >> 3] >>> (7 - (i & 7))) & 1 : 0; }
+    for (; col > 0; col -= 2) {
+      if (col === 6) col--;
+      for (;;) {
+        for (var c = 0; c < 2; c++) { var cc = col - c; if (m[row][cc] === null) m[row][cc] = bitAt(idx++); }
+        row += dir; if (row < 0 || row >= s) { row -= dir; dir = -dir; break; }
+      }
+    }
+  }
+  function maskFn(mask, r, c) {
+    switch (mask) {
+      case 0: return (r + c) % 2 === 0; case 1: return r % 2 === 0; case 2: return c % 3 === 0;
+      case 3: return (r + c) % 3 === 0; case 4: return (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0;
+      case 5: return ((r * c) % 2 + (r * c) % 3) === 0; case 6: return (((r * c) % 2 + (r * c) % 3) % 2) === 0;
+      case 7: return (((r + c) % 2 + (r * c) % 3) % 2) === 0;
+    }
+  }
+  function applyMask(m, mask, version) { var s = m.length, rm = reserved(s, version); for (var r = 0; r < s; r++) for (var c = 0; c < s; c++) if (!rm[r][c] && maskFn(mask, r, c)) m[r][c] ^= 1; }
+  function putFormat(m, ecl, mask) {
+    var s = m.length, bits = formatBits(ecl, mask); function bit(i) { return (bits >>> i) & 1; }
+    for (var i = 0; i <= 5; i++) m[i][8] = bit(i);
+    m[7][8] = bit(6); m[8][8] = bit(7); m[8][7] = bit(8);
+    for (var k = 9; k < 15; k++) m[8][14 - k] = bit(k);
+    for (var a = 0; a < 8; a++) m[8][s - 1 - a] = bit(a);
+    for (var b = 8; b < 15; b++) m[s - 15 + b][8] = bit(b);
+    m[s - 8][8] = 1;
+  }
+  // ISO/IEC 18004 mask penalty; lowest score wins (matches the reference encoder exactly)
+  function penalty(m) {
+    var s = m.length, p = 0, cont = new Array(s + 1).fill(0);
+    for (var r = 0; r < s; r++) { var prev = m[r][0], len = 0; for (var c = 0; c < s; c++) { if (m[r][c] === prev) len++; else { if (len >= 5) cont[len]++; len = 1; prev = m[r][c]; } } if (len >= 5) cont[len]++; }
+    for (var c2 = 0; c2 < s; c2++) { var pv = m[0][c2], ln = 0; for (var r2 = 0; r2 < s; r2++) { if (m[r2][c2] === pv) ln++; else { if (ln >= 5) cont[ln]++; ln = 1; pv = m[r2][c2]; } } if (ln >= 5) cont[ln]++; }
+    for (var l = 5; l <= s; l++) p += cont[l] * (l - 2);
+    for (var r3 = 0; r3 < s - 1; r3++) { var c3 = 0; while (c3 < s - 1) { var tr = m[r3][c3 + 1]; if (tr !== m[r3 + 1][c3 + 1]) { c3 += 2; continue; } if (tr !== m[r3][c3]) { c3 += 1; continue; } if (tr !== m[r3 + 1][c3]) { c3 += 1; continue; } p += 3; c3 += 1; } }
+    function L3(get) { var cnt = 0; for (var i = 0; i < s - 10; i++) { var o1 = !get(i + 1) && get(i + 4) && !get(i + 5) && get(i + 6) && !get(i + 9) && get(i) && get(i + 2) && get(i + 3) && !get(i + 7) && !get(i + 8) && !get(i + 10); var o2 = !get(i + 1) && get(i + 4) && !get(i + 5) && get(i + 6) && !get(i + 9) && !get(i) && !get(i + 2) && !get(i + 3) && get(i + 7) && get(i + 8) && get(i + 10); if (o1 || o2) { cnt++; if (get(i + 10)) i++; } } return cnt; }
+    for (var r4 = 0; r4 < s; r4++) p += 40 * L3(function (i) { return m[r4][i]; });
+    for (var c4 = 0; c4 < s; c4++) p += 40 * L3(function (i) { return m[i][c4]; });
+    var dark = 0; for (var r5 = 0; r5 < s; r5++) for (var c5 = 0; c5 < s; c5++) dark += m[r5][c5];
+    p += Math.floor(Math.abs(dark * 100 / (s * s) - 50) / 5) * 10;
+    return p;
+  }
+  function scoreMatrix(s, v, cw, mask) {
+    var m = blank(s); functions(m, v); placeData(m, cw); applyMask(m, mask, v); putFormat(m, 1, mask);
+    // reference scores in "test" mode: format/version/dark modules are zero while scoring
+    for (var i = 0; i <= 5; i++) m[i][8] = 0; m[7][8] = 0; m[8][8] = 0; m[8][7] = 0;
+    for (var k = 9; k < 15; k++) m[8][14 - k] = 0;
+    for (var a = 0; a < 8; a++) m[8][s - 1 - a] = 0;
+    for (var b = 8; b < 15; b++) m[s - 15 + b][8] = 0;
+    m[s - 8][8] = 0;
+    if (v >= 7) for (var p = 0; p < 6; p++) for (var q = 0; q < 3; q++) { m[s - 11 + q][p] = 0; m[p][s - 11 + q] = 0; }
+    return m;
+  }
+  function encode(text) {
+    var v = chooseVersion(Array.prototype.slice.call(new TextEncoder().encode(text)).length);
+    var cw = codewords(text, v), s = 4 * v + 17, best = 0, bestPen = Infinity;
+    for (var mk = 0; mk < 8; mk++) { var pen = penalty(scoreMatrix(s, v, cw, mk)); if (pen < bestPen) { bestPen = pen; best = mk; } }
+    var m = blank(s); functions(m, v); placeData(m, cw); applyMask(m, best, v); putFormat(m, 1, best);
+    return { size: s, version: v, matrix: m };
+  }
+
+  function escA(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
+  G.qrHTML = function (text, px) {
+    px = px || 200;
+    return '<canvas class="qr" data-qr="' + escA(text) + '" data-px="' + px +
+      '" style="width:' + px + 'px;height:' + px + 'px;background:#fff;border-radius:8px"></canvas>';
+  };
+  G.drawQRs = function (root) {
+    var nodes = (root || document).querySelectorAll("canvas[data-qr]:not([data-done])");
+    Array.prototype.forEach.call(nodes, function (cv) {
+      var text = cv.getAttribute("data-qr"), px = parseInt(cv.getAttribute("data-px") || "200", 10);
+      try {
+        var r = encode(text), s = r.size, quiet = 4, total = s + quiet * 2;
+        // size the BACKING STORE in whole device pixels so each module is an exact integer
+        // number of them — a 4px/module code scans; a fractional 3.4px one can fail at 1x.
+        var dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 4);
+        var scale = Math.max(2, Math.floor((px * dpr) / total));
+        var size = scale * total;
+        cv.width = size; cv.height = size;
+        var g = cv.getContext("2d");
+        g.fillStyle = "#fff"; g.fillRect(0, 0, size, size);
+        g.fillStyle = "#000";
+        for (var y = 0; y < s; y++) for (var x = 0; x < s; x++) if (r.matrix[y][x]) g.fillRect((x + quiet) * scale, (y + quiet) * scale, scale, scale);
+        cv.setAttribute("data-done", "1");
+      } catch (e) { cv.setAttribute("title", "qr: " + e.message); }
+    });
+  };
+})(window);
+</script>
+<script>
+"use strict";
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+
+
+// =============================== config =========================================================
+const PARAMS = new URLSearchParams(location.search);
+const CHAINS = {
+  base: {
+    id: 8453, name: "Base",
+    rpc: "https://base-rpc.publicnode.com",
+    // SHIPPED factory, live on Base mainnet 2026-11-07 (treasury-owned); v2 audit-fix 2026-11-09.
+    // feeBps is read LIVE from chain (was 25 at v1 deploy; raised to 500 on 2026-11-08 and still 500).
+    factory: "0x4B05fA6aD0Ba0D0120Dce19Ce34dde6d1316C237",
+    // S4-4 second source: the per-product TollRegistry (Base-only). If feeBps() faults, the page reads
+    // toll("g2b-escrow") as a genuine chain read instead of a BAKED number. Addr copied from
+    // g4c-toll-registry/DEPLOY-EVIDENCE.md (GOTCHA #73). Absent on non-Base chains -> no second source.
+    tollRegistry: "0xc8319D6fbc0A8f1685Df9c567557141A289b7A1b",
+    tokens: [
+      ["USDC", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", 6],
+      ["WETH", "0x4200000000000000000000000000000000000006", 18],
+      ["USDT", "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2", 6],
+      ["DAI",  "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb", 18],
+      ["cbBTC","0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", 8],
+      ["EURC", "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42", 6],
+      ["wstETH","0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452", 18],
+      ["AERO", "0x940181a94A35A4569E4529A3CDfB74e38FD98631", 18],
+    ],
+  },
+  base_sepolia: {
+    id: 84532, name: "Base Sepolia",
+    // ENDPOINT-POLICY: publicnode first (`*` CORS, 50k log range); sepolia.base.org is alt only — it
+    // echoes Origin and caps eth_getLogs at 200 blocks (-32614, measured 2026-11-12); NOT 25/s-limited.
+    rpc: "https://base-sepolia-rpc.publicnode.com",
+    alts: ["https://sepolia.base.org"],
+    // Sepolia still carries the v1 factory; the v2 redeploy was Base-only, so this is NOT the v2
+    // address despite the comment above having said v1 and carried v2 (caught 2026-11-12: `0x4B05…`
+    // has 0 bytes on Sepolia, `0x8079…` has code and feeBps()=25, the LIVE-PROOF value).
+    factory: "0x80793a7d35f735bc76BeAf22B1f413926818f410",   // Sepolia v1 (LIVE-PROOF.md)
+    tokens: [
+      ["WETH", "0x4200000000000000000000000000000000000006", 18],
+      ["USDC", "0x036CbD53842c5426634e7929541eC2318f3dCF7e", 6],
+    ],
+  },
+  // OP + Arbitrum: same factory ADDRESS on every chain (CREATE from the same key at nonce 0), so the
+  // address is uniform — only the token list is per-chain. Factory set ahead of the deploy; create
+  // works once the bytecode is there.
+  optimism: {
+    id: 10, name: "Optimism",
+    rpc: "https://mainnet.optimism.io",
+    factory: "0x4B05fA6aD0Ba0D0120Dce19Ce34dde6d1316C237",   // same address (deterministic)
+    tokens: [
+      ["WETH", "0x4200000000000000000000000000000000000006", 18],   // shared OP-stack predeploy
+      ["USDC", "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", 6],
+    ],
+  },
+  arbitrum: {
+    id: 42161, name: "Arbitrum One",
+    rpc: "https://arb1.arbitrum.io/rpc",
+    factory: "0x4B05fA6aD0Ba0D0120Dce19Ce34dde6d1316C237",   // same address (deterministic)
+    tokens: [
+      ["WETH", "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", 18],   // NOT the OP predeploy
+      ["USDC", "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", 6],
+    ],
+  },
+};
+const CHAIN_KEY = PARAMS.get("chain") || "base";
+const C = CHAINS[CHAIN_KEY] || CHAINS.base;
+const RPC = PARAMS.get("rpc") || C.rpc;
+const FACTORY = (PARAMS.get("factory") || C.factory || "").toLowerCase();
+const TOKENS = C.tokens.map(([sym, addr, dec]) => ({ sym, addr, dec }));
+
+const SEL = {
+  balanceOf: "0x70a08231",
+  allowance: "0xdd62ed3e",
+  approve20: "0x095ea7b3",
+  createFor: "0xea6eb391",   // createFor((address,address,address,uint256,bytes32,uint64))
+  release: "0x67d42a8b",     // release(bytes32)
+  refund: "0x590e1ae3",      // refund()
+  // escrow getters
+  payer: "0x123119cd", counterparty: "0xc3df6546", arbiter: "0xfe25e00a",
+  token: "0xfc0c546a", hash: "0x09bd5a60", timeout: "0x70dea79a",
+  deadline: "0x29dcb0cf", amount: "0xaa8c217c", settled: "0x8f775839",
+  factoryOf: "0xc45a0155", status: "0x200d2ed2",
+  feeBps: "0x24a9d853", feeRecipient: "0x46904840",
+  toll: "0x71a41241",        // toll(bytes32) -> (address,uint16,bool) (TollRegistry; S4-4 second source)
+};
+
+// =============================== codec ==========================================================
+const word = (h) => String(h).padStart(64, "0");
+const pad32 = (v) => word(BigInt(v).toString(16));
+const addr32 = (a) => word(a.toLowerCase().replace(/^0x/, ""));
+const isAddr = (a) => /^0x[0-9a-fA-F]{40}$/.test(a || "");
+const isHash = (h) => /^0x[0-9a-fA-F]{64}$/.test(h || "");
+const short = (a) => (a ? a.slice(0, 6) + "…" + a.slice(-4) : "");
+const hexToBig = (h) => BigInt(h && h !== "0x" ? h : "0x0");
+const decOf = (addr) => (TOKENS.find((t) => t.addr.toLowerCase() === (addr || "").toLowerCase()) || {}).dec ?? 18;
+const symOf = (addr) => (TOKENS.find((t) => t.addr.toLowerCase() === (addr || "").toLowerCase()) || {}).sym || short(addr);
+const fmt = (n, d, dp = 6) => {
+  const s = (Number(n) / 10 ** d).toFixed(Math.min(d, dp)).replace(/0+$/, "").replace(/\.$/, "");
+  return s === "" ? "0" : s;
+};
+const when = (ts) => ts ? new Date(Number(ts) * 1000).toISOString().replace("T", " ").slice(0, 19) + "Z" : "—";
+
+// ---- keccak256 (Ethereum) in pure JS — VERIFIED against cast keccak for len 0..600 -------------
+// Adapted from the Keccak-f[1600] permutation; rate 136, pad 0x01..0x80 (Keccak, NOT SHA3).
+
+// the preimage is USER TEXT. The secret committed on-chain is a 32-byte value = keccak256(utf8(text))
+// -- because the contract's release(preimage) takes a bytes32 and checks keccak(preimage)==hash. So:
+//   secret(text) = keccak(utf8(text))      <- what the counterparty must supply on release
+//   lockHash(text) = keccak(secret(text))  <- what gets stored; keccak(secret)==lockHash at release
+// Getting this wrong is the classic double-hash bug: storing keccak(text) AND sending keccak(text)
+// makes the contract check keccak(keccak(text))==keccak(text), which is false.
+const utf8Hex = (s) => bytesToHex(new TextEncoder().encode(s));
+const secretOf = (preimageText) => keccak256(utf8Hex(preimageText));
+const lockHashOf = (preimageText) => keccak256(secretOf(preimageText));
+const hashOf = lockHashOf;   // alias: the value STORED on-chain
+
+// createFor takes a STATIC struct Deal(address,address,address,uint256,bytes32,uint64):
+// six head words, no inner offset. Params are one static tuple, so the args are the flat 6 words.
+function encodeCreateFor(counterparty, arbiter, token, amount, hash, timeout) {
+  return SEL.createFor + addr32(counterparty) + addr32(arbiter) + addr32(token)
+       + pad32(amount) + hash.replace(/^0x/, "") + pad32(timeout);
+}
+const encodeRelease = (preimageText) => SEL.release + secretOf(preimageText).replace(/^0x/, "");
+const encodeRefund = () => SEL.refund;
+const encodeApprove = (spender, amt) => SEL.approve20 + addr32(spender) + pad32(amt);
+
+// =============================== rpc ============================================================
+const app = document.getElementById("app");
+// render, then paint any QR canvases the view emitted (inline encoder lives in the block above)
+const $ = (h) => { app.innerHTML = h; try { drawQRs(app); } catch { /* qr is a nicety, never fatal */ } };
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+let _id = 1;
+async function rpc(method, params, tries = 6) {
+  let last;
+  // ENDPOINT-POLICY fallback: rotate to C.alts on retry — re-hitting the same URL just re-earns the
+  // same 429/fault (GOTCHA #147(b)), then hold on the last entry.
+  const urls = [RPC, ...(C.alts || [])].filter((u, i, a) => a.indexOf(u) === i);
+  for (let i = 0; i < tries; i++) {
+    const url = urls[Math.min(i, urls.length - 1)];
+    try {
+      const r = await _fetchT(url, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: _id++, method, params }),
+      });
+      const j = await r.json();
+      // TWO error shapes, both real (see f1c GOTCHAS #7-class): the JSON-RPC `error` field, AND a
+      // bare {code,message} some public RPCs return on 429 with NO `result`. Missing the second made
+      // j.result undefined and crashed far away with no retry.
+      if (j.error) throw new Error(j.error.message || "rpc error");
+      if (j.result === undefined) throw new Error(j.message || `rpc ${r.status} (no result)`);
+      return j.result;
+    } catch (e) { last = e; if (i < tries - 1) await new Promise((s) => setTimeout(s, 500 * (i + 1))); }
+  }
+  throw last;
+}
+const ethCall = (to, data) => rpc("eth_call", [{ to, data }, "latest"]);
+const chainId = async () => Number(BigInt(await rpc("eth_chainId", [])));
+const sendTx = ({ from, to, data }) => window.ethereum.request({ method: "eth_sendTransaction", params: [{ from, to, data }] });
+const readAddr = async (to, sel) => "0x" + (await ethCall(to, sel)).replace(/^0x/, "").slice(24, 64);
+const readUint = async (to, sel) => BigInt(await ethCall(to, sel));
+const readHash = async (to, sel) => await ethCall(to, sel);
+
+// ── THE FEE, LIVE ─────────────────────────────────────────────────────────────────────────────
+// The page's own rule (§HONESTY RULES 1) is that the fee is read live from the factory's feeBps().
+// It was enforced on the per-escrow badge but NOT in the prose — which froze at the deploy-era 100
+// bps after the owner raised it to 500 (5× understated on the page a stranger is handed). So every
+// prose mention renders from ONE live value.
+//
+// S4-4: no BAKED constant. The fee is the CHAIN. If the factory's feeBps() faults, the page reads the
+// TollRegistry's toll("g2b-escrow") as a genuine SECOND SOURCE (Base only); if BOTH fault it renders
+// "unreachable" with a retry rather than a plausible-looking number that goes stale on a fee change.
+const TOLL = (C.tollRegistry || "").toLowerCase();   // "" on non-Base chains -> no second source
+const FEEKEY = keccak256(utf8Hex("g2b-escrow"));     // keccak-derived, never a typed hash
+let FEEBPS = null;                                   // null => not read yet
+async function readTollBps() {
+  if (!TOLL) return null;
+  try { const raw = await ethCall(TOLL, SEL.toll + FEEKEY.replace(/^0x/, ""));   // (recipient, feeBps, live)
+        return Number(BigInt("0x" + raw.replace(/^0x/, "").slice(64, 128))); }
+  catch (e) { return null; }
+}
+// the ONE fee sentence. Source is always named: a live factory read, the registry's second source, or
+// "unreachable" (both faulted) — never a baked number.
+function feeWord() {
+  if (FEEBPS != null) return `${FEEBPS} bps (${FEEBPS / 100}%)`;
+  return TOLL ? "fee unreachable — retry" : "fee — read live";
+}
+function paintFees() {
+  document.querySelectorAll("[data-fee]").forEach((n) => { n.textContent = feeWord(); });
+  const fn = document.getElementById("feenote");
+  if (fn) fn.textContent = FEEBPS != null
+    ? `${feeWord()} on release, nothing on refund`
+    : (TOLL ? "fee unreachable — press retry (the factory did not answer)" : "fee read live on release, nothing on refund");
+}
+async function readFeeLive() {
+  if (!FACTORY) { paintFees(); return; }
+  try { FEEBPS = Number(await readUint(FACTORY, SEL.feeBps)); }
+  catch (e) {
+    // primary faulted -> second source (the registry's live toll), else stay null (unreachable)
+    FEEBPS = await readTollBps();
+  }
+  paintFees();
+}
+// the retry affordance: re-read the chain.
+async function retryFee() { const fn = document.getElementById("feenote"); if (fn) fn.textContent = "reading the chain…";
+  await readFeeLive(); }
+
+// =============================== views ==========================================================
+function viewHome() {
+  app.innerHTML = `
+    <h1>lock a trade safe</h1>
+    <div class="sub">escrow a token amount against a secret (hashlock) or a chosen arbiter. share a
+      link; the counterparty releases by revealing the secret, or you reclaim after the timeout.
+      the funds sit in a contract, not with us. <a href="./MAINNET-LIVE.md">deploy evidence ↗</a></div>
+    <div class="card">
+      <div class="row">
+        <button id="connect">Connect wallet</button>
+        <span class="mut">or open a shared link / paste an escrow address below</span>
+      </div>
+      <input id="eaddr" placeholder="0x… escrow address" style="margin-top:10px">
+      <button class="ghost" id="viewbtn">View escrow</button>
+    </div>
+    <div class="card" id="form"></div>
+    <details class="card how">
+      <summary><b>how it works</b> <span class="mut">— what this does, and what it does not</span></summary>
+      <div class="howbody">
+        <p><b>What it does.</b> You lock an ERC-20 amount into a fresh escrow contract. Two ways to
+          release it: reveal the <b>preimage</b> of a hash you set (trustless), or a <b>nominated
+          arbiter</b> you pick at creation decides. If nobody releases by the <b>timeout</b>, the
+          payer can reclaim it. The page is static: it talks straight to the chain, no server.</p>
+        <p><b>The fee is <span data-fee>fee — live</span>, on a RELEASE only.</b> Nothing is taken on a refund — a trade that
+          falls through should not also cost a fee. The fee floors on dust, so a tiny escrow pays 0.</p>
+        <p><b>The trust model, stated not implied.</b> A <b>hashlock</b> escrow is fully trustless:
+          whoever presents the correct preimage releases it, anyone may call. An <b>arbiter</b>
+          escrow is <i>nominated trust</i> — the arbiter may release or refund at any time; you chose
+          them. The page never calls an arbiter escrow "trustless".</p>
+        <p><b>The preimage is hashed in your browser.</b> This page computes keccak256 of your secret
+          locally (pure JS, verified against the chain's own hash) so you see the <b>exact</b> hash
+          you will lock — not a hash some server produced. The counterparty needs the preimage; the
+          chain only ever sees the hash until release.</p>
+        <p><b>The refund is your protection.</b> After the timeout, the payer reclaims in full, no
+          fee. This is what stops a quiet counterparty from stranding your funds. The timeout is a
+          duration you choose (10 min … 365 days); the escrow turns it into an absolute deadline.</p>
+        <p><b>What it does not do (v1).</b> One chain per escrow — no cross-chain release (each escrow
+          lives entirely on Base, Optimism, or Arbitrum). One token in, one token out — no
+          cross-token release. No partial fills. No native ETH (ERC-20 only). Single arbiter, not
+          2-of-3 (v2). Nothing custodied by this page or a server.</p>
+      </div>
+    </details>
+    <div class="card mut" id="notes"></div>`;
+  document.getElementById("connect").onclick = connect;
+  document.getElementById("viewbtn").onclick = () => {
+    const a = document.getElementById("eaddr").value.trim();
+    if (!isAddr(a)) { document.getElementById("notes").innerHTML = "<span class='err'>bad address</span>"; return; }
+    location.hash = "#/?e=" + a;
+  };
+  renderForm();
+  renderNotes();
+  paintFees();          // paint a placeholder line, then readFeeLive() fills the real fee
+  readFeeLive();        // fire-and-forget: the live fee repaints the prose when it lands
+  const rt = document.getElementById("feeretry"); if (rt) rt.onclick = retryFee;
+}
+
+function renderForm() {
+  const el = document.getElementById("form");
+  const opts = TOKENS.map((t, i) => `<option value="${i}">${esc(t.sym)}</option>`).join("");
+  el.innerHTML = `
+    <div class="row"><b>create an escrow</b>
+      <span class="mut">${FACTORY ? "" : "— no factory on " + esc(C.name) + " yet; view works, create needs one"}</span></div>
+    <label>token</label><select id="tok">${opts}</select>
+    <label>amount</label><input id="amt" placeholder="e.g. 25.5" value="1">
+    <label>counterparty (receives on release)</label><input id="cp" placeholder="0x…">
+    <label>secret preimage <span class="mut">(the counterparty will need this to release)</span></label>
+    <input id="pre" placeholder="any text — hashed in your browser">
+    <div class="mut" id="hashout" style="margin-top:6px"></div>
+    <label>arbiter <span class="mut">(optional — leave blank for a pure hashlock escrow)</span></label>
+    <input id="arb" placeholder="0x… (blank = trustless hashlock only)">
+    <label>timeout — refund opens after this</label>
+    <select id="to">
+      <option value="600">10 minutes</option>
+      <option value="3600" selected>1 hour</option>
+      <option value="86400">1 day</option>
+      <option value="604800">7 days</option>
+      <option value="2592000">30 days</option>
+    </select>
+    <button id="createbtn" ${FACTORY ? "" : "disabled"}>Create escrow</button>
+    <div id="out"></div>`;
+  const updHash = () => {
+    const p = document.getElementById("pre").value;
+    document.getElementById("hashout").innerHTML = p
+      ? `secret: <span class="addr">${esc(secretOf(p))}</span><br>hash to lock: <span class="addr">${esc(lockHashOf(p))}</span>` : "";
+  };
+  document.getElementById("pre").oninput = updHash;
+}
+
+function renderNotes() {
+  const el = document.getElementById("notes");
+  if (!el) return;
+  el.innerHTML = `
+    <div><b>how the numbers are made</b></div>
+    <div>· every escrow state is read live from the chain — no server, no cache</div>
+    <div>· the fee (<span data-fee>fee — live</span>) is on a RELEASE only; a refund returns 100%</div>
+    <div>· hashlock = trustless; arbiter = nominated trust — the per-escrow view says which</div>
+    ${FACTORY ? "" : `<div class="err">· no factory deployed on ${esc(C.name)} yet — create is disabled, view/read works</div>`}`;
+}
+
+async function connect() {
+  if (!window.ethereum) { document.getElementById("notes").innerHTML = "<span class='err'>no injected wallet — pasting an escrow address still works</span>"; return; }
+  try {
+    const [a] = await window.ethereum.request({ method: "eth_requestAccounts" });
+    window._me = a;
+    document.getElementById("createbtn").onclick = () => doCreate();
+    document.getElementById("out").innerHTML = `<span class="mut">wallet ${esc(short(a))} connected — fill the form and create</span>`;
+  } catch (e) { document.getElementById("notes").innerHTML = `<span class='err'>${esc(e.message || e)}</span>`; }
+}
+
+async function doCreate() {
+  const out = document.getElementById("out");
+  const btn = document.getElementById("createbtn");
+  const me = window._me;
+  if (!me) { out.innerHTML = "<p class='err'>connect a wallet first</p>"; return; }
+  const token = TOKENS[Number(document.getElementById("tok").value)];
+  const cp = document.getElementById("cp").value.trim();
+  const arb = document.getElementById("arb").value.trim() || "0x0000000000000000000000000000000000000000";
+  const pre = document.getElementById("pre").value;
+  const to = Number(document.getElementById("to").value);
+  const amtStr = document.getElementById("amt").value.trim();
+
+  if (!isAddr(cp)) { out.innerHTML = "<p class='err'>counterparty must be an address</p>"; return; }
+  if (arb !== "0x0000000000000000000000000000000000000000" && !isAddr(arb)) { out.innerHTML = "<p class='err'>arbiter must be an address (or blank)</p>"; return; }
+  if (!pre) { out.innerHTML = "<p class='err'>a secret preimage is required</p>"; return; }
+  let amount;
+  try { amount = BigInt(Math.round(Number(amtStr) * 10 ** token.dec)); } catch { }
+  if (!amount || amount <= 0n) { out.innerHTML = "<p class='err'>bad amount</p>"; return; }
+
+  const hash = lockHashOf(pre);
+  btn.disabled = true;
+  const step = (m) => { out.innerHTML = `<p class="mut">${esc(m)}</p>`; };
+  try {
+    const al = await readUint(token.addr, SEL.allowance + addr32(me) + addr32(FACTORY));
+    if (al < amount) {
+      step(`approve ${token.sym} → factory…`);
+      await sendTx({ from: me, to: token.addr, data: encodeApprove(FACTORY, (2n ** 256n) - 1n) });
+    }
+    const predicted = await rpc("eth_call", [{ to: FACTORY, data: "0x2a67672b" + addr32(me) + addr32(cp) + addr32(arb) + addr32(token.addr) + pad32(amount) + hash.replace(/^0x/, "") + pad32(to) }, "latest"]).catch(() => null);
+    step(`creating escrow…`);
+    const h = await sendTx({ from: me, to: FACTORY, data: encodeCreateFor(cp, arb, token.addr, amount, hash, to) });
+    step(`submitted ${h} — waiting…`);
+    for (let i = 0; i < 90; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const rc = await rpc("eth_getTransactionReceipt", [h]).catch(() => null);
+      if (rc && rc.blockNumber) {
+        btn.disabled = false;
+        if (BigInt(rc.status) !== 1n) { out.innerHTML = `<p class="err">tx reverted — ${esc(h)}</p>`; return; }
+        // the escrow address is topics[2] of Created(...) — topic0 of Created is index 1..3; find it
+        const esc_ = findCreatedEscrow(rc.logs, FACTORY);
+        out.innerHTML = esc_
+          ? `<p class="pos">escrow created.</p>
+             <div class="addr">${esc(esc_)}</div>
+             <p class="mut">share this link — the counterparty opens it and pastes the preimage to release:</p>
+             <div class="addr" id="link"></div>
+             <div class="row" style="gap:18px;align-items:flex-start;margin-top:14px">
+               <div><div class="mut" style="margin-bottom:6px">scan to open</div><div id="qrw"></div></div>
+             </div>
+             <p class="mut">keep the preimage (<code>${esc(short(pre))}…</code>) — whoever has it can release.</p>`          : `<p class="pos">escrow created — tx ${esc(h)}</p>`;
+        if (esc_) {
+          const link = location.origin + location.pathname + `?chain=${CHAIN_KEY}` + (PARAMS.get("rpc") ? "&rpc=" + encodeURIComponent(RPC) : "") + "#/?e=" + esc_;
+          document.getElementById("link").textContent = link;
+          const qw = document.getElementById("qrw");
+          if (qw) { qw.innerHTML = qrHTML(link, 200); drawQRs(qw); }
+        }
+        return;
+      }
+    }
+    out.innerHTML = `<p class="mut">still pending: ${esc(h)}</p>`; btn.disabled = false;
+  } catch (e) { btn.disabled = false; out.innerHTML = `<p class="err">${esc(e.message || e)}</p>`; }
+}
+
+// Created(address indexed payer, address indexed escrow, address indexed counterparty, ...)
+const TOPIC_CREATED = keccak256(utf8Hex("Created(address,address,address,address,uint256,bytes32,address,uint64,bytes32,uint256)"));
+function findCreatedEscrow(logs, factory) {
+  for (const lg of logs || []) {
+    if ((lg.topics[0] || "").toLowerCase() !== TOPIC_CREATED.toLowerCase()) continue;
+    if ((lg.address || "").toLowerCase() !== factory.toLowerCase()) continue;
+    return "0x" + lg.topics[2].slice(26);   // topics[2] = escrow address
+  }
+  return null;
+}
+
+async function viewEscrow(addr) {
+  $("<div class='card'>reading escrow…</div>");
+  let cid;
+  try { cid = await chainId(); } catch (e) { $("<div class='card err'>rpc: " + esc(e.message) + "</div>"); return; }
+  document.getElementById("chainbadge").textContent = (CHAINS[CHAIN_KEY] && cid === C.id) ? C.name : "chain " + cid;
+  if (cid !== C.id) { $("<div class='card err'>RPC chain " + cid + " ≠ configured " + C.id + " — pass ?rpc=/&chain= to match</div>"); return; }
+
+  let payer, counterparty, arbiter, token, hash, deadline, amount, settled, status, feeBps, feeRcpt, factoryOf;
+  try {
+    [payer, counterparty, arbiter, token, hash] = await Promise.all([
+      readAddr(addr, SEL.payer), readAddr(addr, SEL.counterparty), readAddr(addr, SEL.arbiter),
+      readAddr(addr, SEL.token), readHash(addr, SEL.hash),
+    ]);
+    [deadline, amount, settled] = await Promise.all([
+      readUint(addr, SEL.deadline), readUint(addr, SEL.amount), readUint(addr, SEL.settled),
+    ]);
+    status = await ethCall(addr, SEL.status).then((r) => {
+      const h = r.replace(/^0x/, ""); const off = Number(BigInt("0x" + h.slice(0, 64))) / 32;
+      const len = Number(BigInt("0x" + h.slice(off * 64, off * 64 + 64)));
+      return "0x" + h.slice(off * 64 + 64, off * 64 + 64 + len * 2);
+    }).then((h) => hexToUtf8(h)).catch(() => "?");
+    factoryOf = await readAddr(addr, SEL.factoryOf);
+    feeBps = await readUint(factoryOf, SEL.feeBps).catch(() => null);
+    feeRcpt = await readAddr(factoryOf, SEL.feeRecipient).catch(() => null);
+  } catch (e) { $("<div class='card err'>not an escrow? " + esc(e.message) + "</div>"); return; }
+
+  const dec = decOf(token), sym = symOf(token);
+  const isSettled = settled === 1n;
+  const past = BigInt(Math.floor(Date.now() / 1000)) >= deadline;
+  const hashlock = hash !== "0x" + "0".repeat(64);
+  const hasArb = arbiter !== "0x" + "0".repeat(40);
+  const trust = hashlock ? (hasArb ? "hashlock + nominated arbiter" : "hashlock — trustless") : "nominated arbiter only";
+  const state = isSettled ? "settled" : past ? "refundable" : "locked";
+  const badge = isSettled ? "warn" : past ? "ok" : "";
+  const fee = feeBps == null ? null : (amount * feeBps) / 10000n;
+
+  app.innerHTML = `
+    <h1>escrow ${esc(short(addr))}</h1>
+    <div class="sub"><span class="badge ${badge}">${esc(state)}</span>
+      <span class="badge">${esc(trust)}</span>
+      ${feeBps != null ? `<span class="badge">fee ${Number(feeBps) / 100}% on release</span>` : ""}</div>
+    <div class="card big">${esc(fmt(amount, dec))} ${esc(sym)}</div>
+    <div class="card">
+      <div class="kv">
+        <div class="k">escrow</div><div>${esc(addr)}</div>
+        <div class="k">payer</div><div>${esc(payer)}</div>
+        <div class="k">counterparty</div><div>${esc(counterparty)}</div>
+        <div class="k">arbiter</div><div>${hasArb ? esc(arbiter) : "<span class='mut'>none (hashlock only)</span>"}</div>
+        <div class="k">token</div><div>${esc(sym)} ${esc(short(token))}</div>
+        <div class="k">hashlock</div><div>${hashlock ? esc(hash) : "<span class='mut'>none</span>"}</div>
+        <div class="k">deadline</div><div>${esc(when(deadline))} <span class="mut">(${past ? "passed — refund open" : "in " + fmt(BigInt(deadline) - BigInt(Math.floor(Date.now() / 1000)), 0) + "s"})</span></div>
+        <div class="k">on release</div><div>counterparty gets ${esc(fmt(fee == null ? amount : amount - fee, dec))} ${esc(sym)}${fee ? `, fee ${esc(fmt(fee, dec))}` : " (no fee — floors)"}</div>
+      </div>
+    </div>
+    <div class="card" id="act"></div>
+    <div class="mut" id="actout"></div>
+    <a href="#/">← new escrow</a>`;
+
+  renderActions(addr, { hashlock, hasArb, arbiter, isSettled, past, sym });
+}
+
+function renderActions(addr, s) {
+  const el = document.getElementById("act");
+  const hasWallet = !!window.ethereum;
+  let html = `<div class="row"><b>act on this escrow</b></div>`;
+  if (s.isSettled) { html += `<p class="mut">settled — no further action.</p>`; el.innerHTML = html; return; }
+  if (s.hashlock) {
+    html += `<label>preimage <span class="mut">(release to the counterparty)</span></label>
+      <input id="mypre" placeholder="the secret">
+      <button id="relbtn" ${hasWallet ? "" : "disabled"}>Release</button>`;
+  } else {
+    html += `<p class="mut">no hashlock on this escrow — only the arbiter can settle it.</p>`;
+  }
+  html += `<hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+    <p class="mut">${s.past ? "the deadline has passed — you (anyone) may refund the payer in full, no fee." : "refund opens at the deadline."}</p>
+    <button class="ghost" id="refbtn" ${hasWallet && s.past ? "" : "disabled"}>Refund to payer</button>`;
+  el.innerHTML = html;
+  const rel = document.getElementById("relbtn");
+  if (rel) rel.onclick = async () => {
+    const pre = document.getElementById("mypre").value;
+    if (!pre) { document.getElementById("actout").innerHTML = "<span class='err'>paste the preimage</span>"; return; }
+    await act(addr, encodeRelease(pre), "release");
+  };
+  const ref = document.getElementById("refbtn");
+  if (ref) ref.onclick = () => act(addr, encodeRefund(), "refund");
+}
+
+async function act(to, data, what) {
+  const out = document.getElementById("actout");
+  const step = (m) => { out.innerHTML = `<span class="mut">${esc(m)}</span>`; };
+  try {
+    const me = (await window.ethereum.request({ method: "eth_requestAccounts" }))[0];
+    step(`submitting ${what}…`);
+    const h = await sendTx({ from: me, to, data });
+    step(`submitted ${h} — waiting…`);
+    for (let i = 0; i < 90; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const rc = await rpc("eth_getTransactionReceipt", [h]).catch(() => null);
+      if (rc && rc.blockNumber) {
+        out.innerHTML = BigInt(rc.status) === 1n
+          ? `<span class="pos">${esc(what)} done — tx ${esc(short(h))}</span>`
+          : `<span class="err">${esc(what)} reverted — ${esc(h)}</span>`;
+        return;
+      }
+    }
+    out.innerHTML = `<span class="mut">still pending: ${esc(h)}</span>`;
+  } catch (e) { out.innerHTML = `<span class="err">${esc(e.message || e)}</span>`; }
+}
+
+function hexToUtf8(h) {
+  try { return new TextDecoder().decode(hexToBytes(h)); } catch { return "?"; }
+}
+
+// =============================== boot ===========================================================
+(function boot() {
+  const route = () => {
+    const m = location.hash.match(/[?&]e=(0x[0-9a-fA-F]{40})/);
+    if (m && isAddr(m[1])) viewEscrow(m[1]); else viewHome();
+  };
+  window.onhashchange = route;
+  route();
+})();
+
+// expose for the e2e harness
+globalThis.keccak256 = keccak256;
+globalThis.hashOf = hashOf; globalThis.secretOf = secretOf; globalThis.lockHashOf = lockHashOf;
+globalThis.utf8Hex = utf8Hex;
+globalThis.encodeCreateFor = encodeCreateFor;
+globalThis.encodeRelease = encodeRelease;
+globalThis.encodeRefund = encodeRefund;
+globalThis.encodeApprove = encodeApprove;
+globalThis.viewEscrow = viewEscrow;
+globalThis.viewHome = viewHome;
+globalThis.pad32 = pad32;
+globalThis.addr32 = addr32;
+globalThis.SEL = SEL;
+globalThis.CHAINS = CHAINS;
+</script>
+
+<div class="dx-foot">
+  <div class="dx-foot-in">
+    <div class="dx-foot-brand"><a href="../index.html">← DEX fleet</a>
+      <span>truth-only · every number read on-chain</span></div>
+    <nav class="dx-foot-nav" aria-label="All pages"><a href="../subscribe/index.html">Subscriptions</a><a href="../merchant/index.html">For merchants</a><a href="../g2b-escrow/index.html">Escrow</a><a href="../g2a-streams/index.html">Streams</a><a href="../f1a-payment-links/index.html">Payment links</a><a href="../p2-forwarder/index.html">Forwarder</a><a href="../p3-router/index.html">Swap router</a><a href="../g4b-receipts/index.html">Receipts</a><a href="../g3a-sponsorship/index.html">Gasless</a><a href="../f1c-duster/index.html">Dust → USDC</a><a href="../miniapp/index.html">Pay in-feed</a><a href="../fleet-executor/index.html">Executor</a><a href="../status/index.html">Status</a><a href="../security/index.html">Security</a><a href="../changelog/index.html">Changelog</a></nav>
+  </div>
+</div>
+<!-- dx-timelock:start -->
+<div class="dx-timelock" id="dxTimelock" style="display:none;max-width:720px;margin:14px auto 0;padding:9px 12px;border:1px solid var(--line,#2a3550);border-radius:8px;font-size:12.5px;color:var(--mut,#8fa0be)"></div>
+<script>
+"use strict";
+(function () {
+  var el = document.getElementById("dxTimelock"); if (!el) return;
+  var ADDR = "0x4B05fA6aD0Ba0D0120Dce19Ce34dde6d1316C237", BAKED = 172800, RPC = "https://base-rpc.publicnode.com";
+  var SEL = "0x7aadef8b";
+  function hum(s) { var d = s / 86400; return (d % 1 === 0) ? (d + " day" + (d > 1 ? "s" : "")) : Math.round(s / 3600) + "h"; }
+  function paint(sec, live) {
+    if (!sec) return;
+    el.innerHTML = "<b>a fee change is STAGED, not instant</b> — the owner's raise or recipient change "
+      + "waits <b>" + hum(sec) + "</b> (the contract's TIMELOCK) before it can be committed"
+      + (live ? " — read live on-chain" : " — TIMELOCK " + hum(BAKED) + " baked, RPC unreachable") + ".";
+    el.style.display = "";
+  }
+  paint(BAKED, false);
+  try {
+    var ac = new AbortController(); var to = setTimeout(function () { ac.abort(); }, 8000);
+    fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, signal: ac.signal,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: ADDR, data: SEL }, "latest"] }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (j && j.result) paint(parseInt(j.result.slice(-16), 16), true); })
+      .catch(function () {})
+      .finally(function () { clearTimeout(to); });
+  } catch (e) {}
+})();
+</script>
+<!-- dx-timelock:end -->
+</body>
+</html>

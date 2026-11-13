@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<!--
+  F1-c / T1-b — dust funnel. ONE static file, NO server, NO build step, NO third-party deps.
+  Hand-rolled ABI encode/decode over raw eth_call / MC3 aggregate3, matching the lane's style
+  (see p2-forwarder/frontend for the same convention).
+
+  WHAT IT DOES: connect (or paste) an address, scan a curated Base token set for dust, price each
+  token at an EXECUTABLE on-chain mark, show net-after-gas per route, then sweep everything to USDC
+  in one signature. Zero fee. Non-custodial: the user's own Permit2 permits move the user's own
+  tokens; the sweeper pays the user directly.
+
+  HONESTY RULES THIS PAGE FOLLOWS (set by review):
+   1. Every price is an on-chain quote (UniV3 quoter / pool slot0), never an oracle mark.
+   2. GAS IS A COLUMN, and the sort is by net-after-gas. A value-only sort inverts at dust (#46).
+   3. The CoW row is SHOWN EVEN WHEN IT IS WORST, because at dust size it usually is (flat fee
+      floor, #28). Hiding the losing row would be the "cheap comparison" mistake.
+   4. Rows that lose too much to gas+floor are tagged, not silently dropped.
+   5. First sweep costs setup: one ERC20->Permit2 approve per token (Permit2.approve too). Stated,
+      not hidden behind "one click".
+   6. DEPTH LENS IS A COLUMN: "vs spot" shows quoted vs the pool's no-impact slot0 spot, in bps.
+      At dust it prints "0 (at spot)" — you pay the FEE, not the depth. A true-sized clip shows real
+      bps. The lens is visible, never a hidden tiebreak (sort stays net-after-gas).
+   7. The headline is the BEST route per token, summed — not the sum of every row (a token with a
+      pool row and a CoW row must not double-count).
+
+  ROUTES (hash-routed so file:// works):  #/  -> the scan   #/?a=0x..  -> read-only for an address
+  CONFIG via query: ?rpc=<url>  ?chain=base|base_sepolia  ?sweeper=0x..
+-->
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dust — sweep your dust to USDC</title>
+<style>
+  /* palette UNIFIED with the landing (dex-site/index.html) so the whole site reads as one system */
+  :root { --bg:#05080f; --fg:#e9eefb; --mut:#8fa0be; --card:#0b1222; --line:#18233a;
+          --acc:#4d94ff; --ok:#34d399; --warn:#fbbf24; --bad:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .wrap { max-width:760px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:18px; margin:0 0 4px; letter-spacing:.5px; }
+  .sub { color:var(--mut); font-size:13px; margin-bottom:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin:14px 0; }
+  label { display:block; color:var(--mut); font-size:12px; text-transform:uppercase;
+          letter-spacing:.6px; margin:14px 0 6px; }
+  input, select { width:100%; background:#0e1116; color:var(--fg); border:1px solid var(--line);
+                  border-radius:8px; padding:10px 12px; font:inherit; }
+  input:focus, select:focus { outline:none; border-color:var(--acc); }
+  button { background:var(--acc); color:#06131f; border:0; border-radius:8px; padding:11px 16px;
+           font:inherit; font-weight:700; cursor:pointer; margin-top:16px; }
+  button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:default; }
+  .big { font-size:30px; font-weight:700; margin:6px 0; }
+  .addr { overflow-wrap:anywhere; background:#0e1116; border:1px solid var(--line);
+          border-radius:8px; padding:12px; margin-top:6px; font-size:13px; }
+  .badge { display:inline-block; font-size:11px; padding:3px 8px; border-radius:999px;
+           border:1px solid var(--line); color:var(--mut); }
+  .badge.ok { color:var(--ok); border-color:var(--ok); }
+  .badge.warn { color:var(--warn); border-color:var(--warn); }
+  .badge.bad { color:var(--bad); border-color:var(--bad); }
+  a { color:var(--acc); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .mut { color:var(--mut); font-size:13px; }
+  details.how > summary { cursor:pointer; color:var(--fg); }
+  details.how > summary::marker { color:var(--acc); }
+  .howbody p { margin:12px 0 0; font-size:13px; color:var(--mut); line-height:1.6; }
+  .howbody b { color:var(--fg); }
+  .howbody i { color:var(--fg); font-style:normal; }
+  .err { color:var(--warn); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th { text-align:right; color:var(--mut); font-weight:400; font-size:11px; text-transform:uppercase;
+       letter-spacing:.5px; padding:6px 6px; border-bottom:1px solid var(--line); }
+  th.l, td.l { text-align:left; }
+  td { text-align:right; padding:7px 6px; border-bottom:1px solid #191d24; }
+  tr.cow td { color:var(--mut); }
+  tr.tag td { color:var(--bad); }
+  .sym { color:var(--fg); font-weight:700; }
+  .pos { color:var(--ok); }
+  .neg { color:var(--bad); }
+  .scroll { overflow-x:auto; }
+  pre { background:#0e1116; border:1px solid var(--line); border-radius:8px; padding:12px;
+        overflow-x:auto; font-size:12px; }
+  .nav { margin-bottom:20px; font-size:13px; display:flex; justify-content:space-between; }
+</style>
+<link rel="stylesheet" href="../_assets/theme.css">
+<link rel="icon" type="image/svg+xml" href="../_assets/favicon.svg">
+</head>
+<body>
+<!-- dx-chrome --><style>
+/* dx-chrome — shared, namespaced. Injected by chrome.py; do not hand-edit in built files. */
+.dx-top{position:relative;z-index:50;background:rgba(5,8,15,.72);backdrop-filter:blur(8px);border-bottom:1px solid #18233a}
+.dx-top-in{max-width:900px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px}
+.dx-home{display:inline-flex;align-items:center;gap:7px;font:600 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color:#e9eefb;text-decoration:none;padding:6px 2px}
+.dx-home:hover{color:#4d94ff}
+.dx-home .dx-arrow{color:#4d94ff}
+.dx-tag{font:500 12.5px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be;margin-left:auto}
+.dx-foot{position:relative;z-index:50;margin-top:56px;border-top:1px solid #18233a;background:rgba(5,8,15,.72)}
+.dx-foot-in{max-width:900px;margin:0 auto;padding:24px 20px 40px}
+.dx-foot-brand{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+.dx-foot-brand a{font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;text-decoration:none}
+.dx-foot-brand a:hover{color:#4d94ff}
+.dx-foot-brand span{font:500 12.5px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be}
+.dx-foot-nav{display:flex;gap:9px;flex-wrap:wrap}
+.dx-foot-nav a{font:600 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;
+  text-decoration:none;background:rgba(255,255,255,.04);border:1px solid #18233a;border-radius:999px;padding:7px 13px}
+.dx-foot-nav a:hover{border-color:#4d94ff;color:#4d94ff}
+@media(max-width:600px){.dx-tag{display:none}}
+</style>
+<div class="dx-top">
+  <div class="dx-top-in">
+    <a class="dx-home" href="../index.html"><span class="dx-arrow">←</span> DEX fleet</a>
+    <span class="dx-tag">non-custodial rails on Base</span>
+  </div>
+</div>
+<div class="wrap">
+  <div class="nav">
+    <span><b>dust</b> <span class="mut">→ USDC on Base</span></span>
+    <span class="mut" id="chainbadge">…</span>
+  </div>
+  <div id="app">loading…</div>
+  <p class="mut" style="margin-top:40px">
+    static page · reads the chain directly · no server, no account, no cookies · zero fee
+  </p>
+</div>
+<script src="../_assets/lib.js"></script>
+<script>
+"use strict";
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+
+
+// =============================== config =========================================================
+const PARAMS = new URLSearchParams(location.search);
+// Two chains are supported. Default base (mainnet) because that is where the honest numbers live:
+// the UniV3 quoter, CoW, and Chainlink all answer there. Base Sepolia has the deployed sweeper but
+// NO quoter and NO CoW, so its prices fall back to pool slot0 spot (labelled).
+const CHAINS = {
+  base: {
+    id: 8453, name: "Base",
+    rpc: "https://base-rpc.publicnode.com",
+    quoter: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
+    factory: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+    chainlinkEthUsd: "0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70",
+    cow: "https://api.cow.fi/base/api/v1",
+    sweeper: "0x8c38c2bbECa7575c24ACEf1d907Aa1F4f43CbFB9",  // Base v2 (audit-fix, 2166 B, TokenMismatch present); the superseded pre-fix fire 0x6f21409A… was code-identical to v1 and is NOT used; v1 0x5F6f5dee… stays live
+    swapRouter: "0x2626664c2603336E57B271c5C0b26F421741e481",
+  },
+  base_sepolia: {
+    id: 84532, name: "Base Sepolia",
+    // ENDPOINT-POLICY: publicnode first — `*` CORS, 50k log range. sepolia.base.org is the alt only:
+    // it echoes Origin instead of `*` and caps eth_getLogs at a 200-block range (-32614, measured
+    // 2026-11-12). It is NOT the 25/s limit that mainnet.base.org has (10/10 concurrent 200s).
+    rpc: "https://base-sepolia-rpc.publicnode.com",
+    alts: ["https://sepolia.base.org"],
+    quoter: null,                       // verified absent 2026-11-05 -> pool slot0 fallback
+    factory: "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24",
+    chainlinkEthUsd: "0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1",
+    cow: null,
+    sweeper: "0x5F6f5dee0c371ed13D9151B9C64d9fBf30245800",
+    swapRouter: "0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4",
+  },
+};
+const CHAIN_KEY = PARAMS.get("chain") || "base";
+const C = CHAINS[CHAIN_KEY] || CHAINS.base;
+const RPC = PARAMS.get("rpc") || C.rpc;
+const SWEEPER = (PARAMS.get("sweeper") || C.sweeper || "").toLowerCase();
+
+const MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11";
+const PERMIT2    = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
+const USDC       = CHAIN_KEY === "base"
+  ? "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+  : "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+
+// Curated dust set: tokens with a real USDC pool on Base (probed live 2026-11-05). decimals are
+// probed values; a full "find every swap-pable token" scan is v2.
+const TOKENS_BASE = [
+  ["WETH","0x4200000000000000000000000000000000000006",18],
+  ["USDT","0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",6],
+  ["DAI","0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb",18],
+  ["cbETH","0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22",18],
+  ["cbBTC","0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",8],
+  ["USDbC","0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA",6],
+  ["AERO","0x940181a94A35A4569E4529A3CDfB74e38FD98631",18],
+  ["DEGEN","0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed",18],
+  ["BRETT","0x532f27101965dd16442E59d40670FaF5eBB142E4",18],
+  ["WELL","0xA88594D404727625A9437C3f886C7643872296AE",18],
+  ["VIRTUAL","0x0b3e328455c4059EEb9e3f84b5543F74E24e7E1b",18],
+];
+const TOKENS_SEPOLIA = [
+  ["WETH","0x4200000000000000000000000000000000000006",18],
+];
+const TOKENS = (CHAIN_KEY === "base" ? TOKENS_BASE : TOKENS_SEPOLIA)
+  .map(([sym, addr, dec]) => ({ sym, addr, dec }));
+
+const FEES = [100, 500, 3000, 10000];        // UniV3 tiers probed, best wins
+const GAS_PER_LEG = 180_000;                 // measured: fork 3-token sweep 482,618 gas / 3 legs, rounded up
+const ETH_USD_FALLBACK = 2400.0;             // used only if the Chainlink read fails; labelled when so
+
+const SEL = {
+  aggregate3: "0x82ad56cb",
+  quoteSingle: "0xc6a5026a",
+  balanceOf: "0x70a08231",
+  allowance: "0xdd62ed3e",
+  approve20: "0x095ea7b3",
+  permit2Allowance: "0x927da105",   // allowance(address,address,address)
+  permit2Approve: "0x87517c45",     // approve(address,address,uint160,uint48)
+  sweep: "0xe7ea3ccb",
+  latestRoundData: "0xfeaf968c",
+};
+
+// =============================== codec ==========================================================
+const word = (h) => h.padStart(64, "0");
+const pad32 = (v) => word(BigInt(v).toString(16));
+const addr32 = (a) => word(a.toLowerCase().replace(/^0x/, ""));
+const isAddr = (a) => /^0x[0-9a-fA-F]{40}$/.test(a || "");
+const ZERO = "0x" + "0".repeat(40);
+const isZero = (a) => !a || a.toLowerCase() === ZERO;
+const short = (a) => (a ? a.slice(0, 6) + "…" + a.slice(-4) : "");
+const hexToBig = (h) => BigInt(h && h !== "0x" ? h : "0x0");
+const fmt = (n, dec) => {
+  const s = (Number(n) / 10 ** dec).toFixed(Math.min(dec, 6)).replace(/0+$/, "").replace(/\.$/, "");
+  return s === "" ? "0" : s;
+};
+const usd = (x) => (x == null ? "—" : (x < 0 ? "-$" : "$") + Math.abs(x).toFixed(6));
+const usd4 = (x) => (x == null ? "—" : (x < 0 ? "-$" : "$") + Math.abs(x).toFixed(4));
+
+const app = document.getElementById("app");
+const $ = (h) => { app.innerHTML = h; };
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---- raw json-rpc ------------------------------------------------------------------------------
+let _id = 1;
+// public RPCs rate-limit; a page that dies on the 6th read of a 9-token scan is not honest about
+// "it works". Retry with backoff (429s and transient 5xx), then surface the error.
+async function rpc(method, params, tries = 6) {
+  let last;
+  // ENDPOINT-POLICY fallback: rotate to C.alts on retry — re-hitting the same URL just re-earns the
+  // same 429/fault (GOTCHA #147(b)), then hold on the last entry.
+  const urls = [RPC, ...(C.alts || [])].filter((u, i, a) => a.indexOf(u) === i);
+  for (let i = 0; i < tries; i++) {
+    const url = urls[Math.min(i, urls.length - 1)];
+    try {
+      const r = await _fetchT(url, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: _id++, method, params }),
+      });
+      const j = await r.json();
+      // TWO error shapes, both real: the JSON-RPC `error` field, AND a bare {code,message} that
+      // some public RPCs (Base mainnet, on 429) return with a 2xx/429 and NO `result`. Missing the
+      // second shape meant j.result was undefined and the caller crashed far away (on `.replace`),
+      // with no retry — the rate limit looked like a codec bug. A 10-token scan fires a burst of
+      // calls (quotes + depth lens), so the public 25/s limit is hit in normal use: back off hard.
+      if (j.error) throw new Error(j.error.message || "rpc error");
+      if (j.result === undefined) throw new Error(j.message || `rpc ${r.status} (no result)`);
+      return j.result;
+    } catch (e) { last = e; if (i < tries - 1) await new Promise((s) => setTimeout(s, 500 * (i + 1))); }
+  }
+  throw last;
+}
+const ethCall = (to, data) => rpc("eth_call", [{ to, data }, "latest"]);
+
+// ---- Aggregate3: one eth_call, N reads. Used for balanceOf AND for the quoter sweep. -----------
+// calls = [{target, data}] -> decoded returnData[] (throws if any leg failed)
+function encodeAggregate3(calls) {
+  // aggregate3((address target, bool allowFailure, bytes callData)[])
+  // The array is dynamic and each ELEMENT is dynamic (it holds bytes), so: selector, offset-to-array,
+  // [len, offset_0..offset_n], then each element = addr, bool, offset-to-its-bytes, len, bytes.
+  const n = calls.length;
+  const parts = calls.map((c) => {
+    const data = c.data.slice(2);
+    // bytes payload MUST be zero-padded to a 32-byte boundary, or the next element's offset drifts
+    const padded = data.padEnd(Math.ceil(data.length / 64) * 64, "0");
+    return addr32(c.target) + pad32(c.allowFailure ? 1 : 0) + pad32(0x60) + pad32(data.length / 2) + padded;
+  });
+  let arr = pad32(n);
+  let cursor = n * 32;                        // offsets relative to start of the element block
+  for (const p of parts) { arr += pad32(cursor); cursor += p.length / 2; }
+  return SEL.aggregate3 + pad32(0x20) + arr + parts.join("");
+}
+function decodeAggregate3(ret) {
+  const h = ret.replace(/^0x/, "");
+  const w = (i) => h.slice(i * 64, (i + 1) * 64);
+  const arrStart = Number(BigInt("0x" + w(0))) / 32;   // in words
+  const n = Number(BigInt("0x" + w(arrStart)));
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const elemOff = Number(BigInt("0x" + w(arrStart + 1 + i))) / 32;
+    const base = arrStart + 1 + elemOff;
+    const success = BigInt("0x" + w(base)) !== 0n;
+    const bytesOff = Number(BigInt("0x" + w(base + 1))) / 32;
+    const len = Number(BigInt("0x" + w(base + bytesOff)));
+    const data = "0x" + h.slice((base + bytesOff + 1) * 64, (base + bytesOff + 1) * 64 + len * 2);
+    out.push({ success, data });
+  }
+  return out;
+}
+// quoteExactInputSingle takes a STATIC struct, so the tuple is flattened: 5 head words, no offset.
+function encodeQuoter(tokenIn, tokenOut, amountIn, fee) {
+  return SEL.quoteSingle + addr32(tokenIn) + addr32(tokenOut) + pad32(amountIn) + pad32(fee) + pad32(0);
+}
+const decodeUint = (data) => BigInt("0x" + data.replace(/^0x/, "").slice(0, 64));
+
+// =============================== chain reads ====================================================
+async function chainId() { return Number(BigInt(await rpc("eth_chainId", []))); }
+async function gasPriceWei() { return BigInt(await rpc("eth_gasPrice", [])); }
+async function ethUsd() {
+  try {
+    const ret = (await ethCall(C.chainlinkEthUsd, SEL.latestRoundData)).replace(/^0x/, "");
+    const ans = BigInt("0x" + ret.slice(64, 128));       // int256 answer, 8 dec
+    if (ans > 0n) return { price: Number(ans) / 1e8, src: "chainlink" };
+  } catch { /* fall through */ }
+  return { price: ETH_USD_FALLBACK, src: "fallback" };
+}
+async function balancesOf(user, tokens) {
+  // allowFailure: a token whose balanceOf reverts (or a non-standard token) must zero that ROW,
+  // not revert the whole scan. Without the flag the `success ? … : 0n` below was dead code.
+  const calls = tokens.map((t) => ({ target: t.addr, data: SEL.balanceOf + addr32(user), allowFailure: true }));
+  const res = decodeAggregate3(await ethCall(MULTICALL3, encodeAggregate3(calls)));
+  return tokens.map((t, i) => ({ ...t, bal: res[i].success ? decodeUint(res[i].data) : 0n }));
+}
+// best direct-pool quote across fee tiers, all tiers in one MC3 call
+async function bestQuote(tokenIn, amountIn) {
+  if (C.quoter) {
+    // allowFailure IS the point here: the FEES sweep probes 4 tiers and not every token has all 4
+    // pools. The UniV3 quoter REVERTS on a missing pool; without allowFailure one reverting tier
+    // reverts the entire aggregate3 (and thus the whole scan). Real bug, found against a real wallet.
+    const calls = FEES.map((f) => ({ target: C.quoter, data: encodeQuoter(tokenIn, USDC, amountIn, f), allowFailure: true }));
+    const res = decodeAggregate3(await ethCall(MULTICALL3, encodeAggregate3(calls)));
+    let best = 0n, bestFee = 0;
+    res.forEach((r, i) => { if (!r.success) return; const o = decodeUint(r.data); if (o > best) { best = o; bestFee = FEES[i]; } });
+    if (best > 0n) return { out: best, fee: bestFee, src: "quoter", spot: await spotOut(tokenIn, amountIn, bestFee) };
+  }
+  return poolSpot(tokenIn, amountIn);      // sepolia: no quoter
+}
+// DEPTH LENS: what the pool's slot0 spot would give for this clip with NO price impact. Comparing it
+// to the quoter's real output isolates the clip's own impact from the fee tier. At dust the two are
+// near-identical (impact ~0), which is the honest headline: at this size you pay the FEE, not the
+// depth. A row where quoted << spot is a thin pool — visible, never hidden.
+async function spotOut(tokenIn, amountIn, fee) {
+  try {
+    const pool = await ethCall(C.factory, "0x1698ee82" + addr32(tokenIn) + addr32(USDC) + pad32(fee));
+    if (!pool || isZero("0x" + pool.slice(26))) return null;
+    const p = "0x" + pool.slice(26);
+    const [t0, slot0] = await Promise.all([ethCall(p, "0x0dfe1681"), ethCall(p, "0x3850c7bd")]);
+    if (!t0 || !slot0) return null;
+    const token0 = "0x" + t0.slice(26);
+    const sqrtP = BigInt("0x" + slot0.replace(/^0x/, "").slice(0, 64));
+    if (sqrtP === 0n) return null;
+    const ratio = (sqrtP * sqrtP * 10n ** 18n) >> 192n;   // 1e18-scaled token1-per-token0
+    if (ratio === 0n) return null;
+    const inIsT0 = token0.toLowerCase() === tokenIn.toLowerCase();
+    const out = inIsT0 ? (amountIn * ratio) / 10n ** 18n : (amountIn * 10n ** 18n) / ratio;
+    return out > 0n ? out : null;
+  } catch { return null; }
+}
+// fallback: read pool slot0 and compute spot (dust clip => price impact ~0). Labelled "spot".
+async function poolSpot(tokenIn, amountIn) {
+  for (const f of FEES) {
+    const pool = await ethCall(C.factory, "0x1698ee82" + addr32(tokenIn) + addr32(USDC) + pad32(f)); // getPool
+    if (!pool || isZero("0x" + pool.slice(26))) continue;
+    const p = "0x" + pool.slice(26);
+    const [t0, slot0] = await Promise.all([ethCall(p, "0x0dfe1681"), ethCall(p, "0x3850c7bd")]);
+    if (!t0 || !slot0) continue;
+    const token0 = "0x" + t0.slice(26);
+    const sqrtP = BigInt("0x" + slot0.replace(/^0x/, "").slice(0, 64));
+    // out ≈ amountIn * sqrtP^2 / 2^192, adjusted for token ordering (token0<token1)
+    let ratio = (sqrtP * sqrtP * 10n ** 18n) >> 192n;   // 1e18-scaled price of token1 per token0
+    const inIsT0 = token0.toLowerCase() === tokenIn.toLowerCase();
+    let out = inIsT0 ? (amountIn * ratio) / 10n ** 18n : (amountIn * 10n ** 18n) / ratio;
+    if (out > 0n) return { out, fee: f, src: "spot", spot: out };  // itself is the spot mark -> vs spot = 0
+  }
+  return null;
+}
+async function cowQuote(token, amountIn, tries = 3) {
+  if (!C.cow) return null;
+  let last = "cow unreachable";
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await _fetchT(C.cow + "/quote", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sellToken: token, buyToken: USDC, from: "0x1111111111111111111111111111111111111111",
+          kind: "sell", sellAmountBeforeFee: amountIn.toString(), partiallyFillable: true,
+          signingScheme: "eip712", onchainOrder: false,
+        }),
+      });
+      if (!r.ok) {
+        // 404 = CoW genuinely has no route for this token; 429/5xx = transient, worth a retry
+        last = "cow " + r.status;
+        if (r.status !== 404 && i < tries - 1) { await new Promise((s) => setTimeout(s, 400 * (i + 1))); continue; }
+        return { err: last };
+      }
+      const q = (await r.json()).quote;
+      return { out: BigInt(q.buyAmount), fee: BigInt(q.feeAmount), src: "cow" };
+    } catch (e) { last = "cow unreachable"; await new Promise((s) => setTimeout(s, 400 * (i + 1))); }
+  }
+  return { err: last };
+}
+
+// =============================== the scorer (mirrors tools/base_dust.py) =========================
+// net_usd = proceeds − gas. sort by net_after_gas desc. None stays None (an unquoted route is not 0).
+function gasUsd(gasUnits, gasWei, ethPrice) { return (Number(gasUnits) * Number(gasWei) / 1e18) * ethPrice; }
+// per-row gas_units if the row carries one (a CoW intent leg differs from an atomic pool leg),
+// else the default. Mirrors tools/base_dust.py's score_rows.
+function scoreRows(rows, ctx) {
+  const out = rows.map((r) => {
+    const g = gasUsd(r.gas_units ?? GAS_PER_LEG, ctx.gasWei, ctx.ethPrice);
+    return { ...r, gas_usd: g, net_after_gas: r.net_usd == null ? null : r.net_usd - g };
+  });
+  out.sort((a, b) => (b.net_after_gas ?? -1e18) - (a.net_after_gas ?? -1e18));
+  return out;
+}
+// a row is tagged when gas+floor eats more than THRESH of the token's own value
+const LOSS_TAG = 0.15;
+// depth lens: quoted output vs the pool's no-impact spot. Tag only when impact is a real number of
+// bps (not the sub-bp noise of a rounding-safe quote) — dust prints ~0, a thin/true-sized pool prints more.
+const IMPACT_TAG = 30; // bps
+const fmtImpact = (bps) => (bps == null ? "—" : bps === 0 ? "0 (at spot)" : bps > 0 ? "-" + bps + " bps" : "+" + -bps + " bps");
+
+// =============================== views ==========================================================
+function viewHome() {
+  $("#");
+  $(""); // no-op guard for older parsers
+  app.innerHTML = `
+    <h1>sweep your dust to USDC</h1>
+    <div class="sub">connect a wallet — we read your balances, price them on-chain, and show what
+      you would actually receive after gas. no fee, nothing custodied.</div>
+    <div class="card">
+      <div class="row">
+        <button id="connect">Connect wallet</button>
+        <span class="mut">or paste an address to preview (read-only):</span>
+      </div>
+      <input id="addr" placeholder="0x… your address" style="margin-top:10px">
+      <button class="ghost" id="scanbtn">Scan that address</button>
+    </div>
+    <details class="card how">
+      <summary><b>how it works</b> <span class="mut">— what this does, and what it does not</span></summary>
+      <div class="howbody">
+        <p><b>What it does.</b> Reads the dust tokens in your wallet, prices each one with a live
+          on-chain quote, subtracts gas, and shows what you would actually keep — then sweeps it all
+          to USDC in <b>one signature</b>. The page is static: it talks straight to the chain, there
+          is no server, no account, no database.</p>
+        <p><b>What the fee is: zero.</b> By design. Every sweep you keep 100% minus chain costs; we
+          make nothing on the sweep itself. (Our money is downstream — this funnel exists to earn
+          the right to be your rail later.) "net after gas" is the honest number: the notional your
+          dust is worth, minus what the transaction costs to move it.</p>
+        <p><b>The CoW row.</b> Each token gets two routes: a direct UniV3 pool, and a CoW intent
+          (a batch auction). CoW's fee is a <b>flat absolute floor</b> (~a fraction of a cent,
+          charged per order no matter how small); a pool's fee is <b>proportional</b> (a %). At dust
+          size the flat fee dominates, so <b>CoW usually loses</b> — and the row is shown anyway,
+          not hidden, because hiding a losing option is how you quietly mislead. CoW only wins on
+          larger clips.</p>
+        <p><b>What "0 (at spot)" means.</b> The <b>vs spot</b> column compares the quoted output
+          against the pool's own no-impact spot price. "0 (at spot)" means your clip is so small it
+          moves the pool price by nothing — at that size you are paying the <b>fee</b>, not the
+          <b>depth</b>. On a big or thin clip the column shows real basis points (e.g. -7228 bps on
+          a 0.3% pool) — that is genuine price impact, and you see it instead of a number that hides it.</p>
+        <p><b>Why the sort is by "net after gas", not by value.</b> At dust, a token worth more
+          notional can be worth <i>less</i> to sweep than a smaller one, if its route costs more gas.
+          Sorting by raw value inverts at exactly the sizes this page is for.</p>
+        <p><b>What it does not do.</b> No partial selection (v1 sweeps the best route per token it
+          found). No token discovery beyond the curated set. First sweep costs one extra approval per
+          token (ERC-20 → Permit2, then Permit2 → the sweeper) — stated up front, not buried under
+          "one click". Your tokens move only after your own permits; the sweeper never holds funds.</p>
+      </div>
+    </details>
+    <div class="card mut" id="notes"></div>`;
+  document.getElementById("connect").onclick = connect;
+  document.getElementById("scanbtn").onclick = () => {
+    const a = document.getElementById("addr").value.trim();
+    if (!isAddr(a)) { document.getElementById("notes").innerHTML = "<span class='err'>bad address</span>"; return; }
+    scan(a);
+  };
+  renderNotes();
+}
+
+function renderNotes() {
+  const el = document.getElementById("notes");
+  if (!el) return;
+  el.innerHTML = `
+    <div><b>how the numbers are made</b></div>
+    <div>· every price is a live on-chain quote (UniV3 quoter${C.quoter ? "" : " — this chain has no quoter, using pool spot"})${C.cow ? " and CoW" : ""}</div>
+    <div>· gas is a column; rows are sorted by <b>net after gas</b>, not notional</div>
+    <div>· the CoW row is shown even when it loses — at dust it usually does (flat fee floor)</div>
+    <div>· the sweep contract moves your tokens only after your own permits; it never holds funds</div>
+    ${SWEEPER ? "" : `<div class="err">· no sweeper deployed on ${esc(C.name)} yet — scan/price work, sweep needs one</div>`}`;
+}
+
+async function connect() {
+  if (!window.ethereum) { document.getElementById("notes").innerHTML = "<span class='err'>no injected wallet — paste an address instead</span>"; return; }
+  try {
+    const [a] = await window.ethereum.request({ method: "eth_requestAccounts" });
+    scan(a, true);
+  } catch (e) { document.getElementById("notes").innerHTML = `<span class='err'>${esc(e.message || e)}</span>`; }
+}
+
+async function scan(user, canSign) {
+  $("<div class='card'>scanning balances…</div>");
+  let ctx = { ethPrice: 0, ethSrc: "?", gasWei: 0n };
+  try {
+    const [cid, gp, eu] = await Promise.all([chainId(), gasPriceWei(), ethUsd()]);
+    document.getElementById("chainbadge").textContent = (CHAINS[CHAIN_KEY] && cid === C.id) ? C.name : "chain " + cid;
+    if (cid !== C.id) { $("<div class='card err'>RPC chain "+cid+" ≠ configured "+C.id+" — pass ?rpc=/&chain= to match</div>"); return; }
+    ctx.gasWei = gp; ctx.ethPrice = eu.price; ctx.ethSrc = eu.src;
+  } catch (e) { $("<div class='card err'>rpc: " + esc(e.message) + "</div>"); return; }
+
+  const withBal = await balancesOf(user, TOKENS);
+  const held = withBal.filter((t) => t.bal > 0n);
+  if (!held.length) { renderResult(user, canSign, [], ctx); return; }
+
+  const rows = [];
+  for (const t of held) {
+    const [pool, cow] = await Promise.all([bestQuote(t.addr, t.bal), cowQuote(t.addr, t.bal)]);
+    const push = (venue, src, q, note) => {
+      const base = { sym: t.sym, token: t, bal: t.bal, dec: t.dec, fee_from: q && q.fee };
+      if (!q || !q.out) {
+        rows.push({ ...base, venue, route: note || venue + " (no quote)", net_usd: null, gas_tagged: true, note: q && q.err ? q.err : "no route" });
+        return;
+      }
+      const outUsdc = Number(q.out) / 1e6;                      // USDC dec = 6
+      const feeUsd = q.fee ? Number(q.fee) / 10 ** t.dec : 0;   // CoW fee is in SELL-token units
+      // depth lens: quoted vs the pool's no-impact spot, in bps of slippage. null when no spot.
+      let impact_bps = null;
+      if (q.spot && q.spot > 0n) impact_bps = Number(((q.spot - q.out) * 10000n) / q.spot);
+      rows.push({ ...base, venue, route: src, out: q.out, fee: q.fee, net_usd: outUsdc - feeUsd, note, impact_bps });
+    };
+    if (pool) push("pool", `UniV3 ${pool.fee / 1e4}%`, pool, pool.src === "spot" ? "pool spot" : "");
+    if (cow) push("cow", "CoW intent", cow, cow.src === "cow" ? "flat fee floor" : "");
+  }
+  const scored = scoreRows(rows, ctx);
+  renderResult(user, canSign, scored, ctx);
+}
+
+function renderResult(user, canSign, rows, ctx) {
+  const syms = [...new Set(rows.map((r) => r.sym))];
+  const n = syms.length;
+  // HEADLINE = what the user would actually keep if they swept: the BEST route per token, not the
+  // sum of every row (a token with a pool row AND a CoW row must not be counted twice).
+  const bestPerSym = {};
+  for (const r of rows) {
+    if (r.net_after_gas == null) continue;
+    if (bestPerSym[r.sym] == null || r.net_after_gas > bestPerSym[r.sym].net_after_gas) bestPerSym[r.sym] = r;
+  }
+  const best = Object.values(bestPerSym);
+  const total = best.reduce((s, r) => s + r.net_after_gas, 0);
+  const grossBest = best.reduce((s, r) => s + (r.net_usd ?? 0), 0);
+  const gasSpent = best.reduce((s, r) => s + (r.gas_usd ?? 0), 0);
+  const covered = best.length;   // tokens with at least one live route
+
+  const body = rows.map((r) => {
+    const tag = r.net_after_gas != null && r.net_usd > 0 && r.gas_usd / r.net_usd > LOSS_TAG;
+    const isBest = bestPerSym[r.sym] === r;
+    const cls = [r.venue === "cow" ? "cow" : "", tag ? "tag" : ""].join(" ").trim();
+    const okTag = r.venue === "cow" ? `<span class="badge">CoW</span>` : `<span class="badge ok">pool</span>`;
+    const bTag = isBest ? ` <span class="badge ok">best</span>` : "";
+    return `<tr class="${cls}">
+      <td class="l"><span class="sym">${esc(r.sym)}</span> ${okTag}${bTag}${tag ? ` <span class="badge bad">gas-heavy</span>` : ""}</td>
+      <td class="l mut">${esc(r.route)}</td>
+      <td>${fmt(r.bal, r.dec)}</td>
+      <td>${r.net_usd == null ? "—" : esc(r.net_usd.toFixed(6))}</td>
+      <td class="neg">${r.gas_usd == null ? "—" : "-" + r.gas_usd.toFixed(6)}</td>
+      <td class="${(r.net_after_gas ?? 0) >= 0 ? "pos" : "neg"}"><b>${r.net_after_gas == null ? "—" : r.net_after_gas.toFixed(6)}</b></td>
+      <td class="mut ${r.impact_bps != null && r.impact_bps >= IMPACT_TAG ? "bad" : ""}" title="quoted output vs the pool's no-impact spot price">${fmtImpact(r.impact_bps)}</td>
+      <td class="l mut">${esc(r.note || "")}</td>
+    </tr>`;
+  }).join("");
+
+  const canSweep = !!(canSign && window.ethereum && SWEEPER);
+  const setupNote = SWEEPER
+    ? `first sweep also needs a one-time approval per token (ERC-20 → Permit2, then Permit2 → sweeper).`
+    : `sweeper not deployed on this chain — deploy pending.`;
+
+  $("");
+  app.innerHTML = `
+    <h1>your dust</h1>
+    <div class="sub">${n} token${n === 1 ? "" : "s"} with a balance · sweeping all keeps
+      <b>${usd4(total)}</b> <span class="mut">(best route per token, after gas — gross ${usd4(grossBest)} less ${usd4(gasSpent)} gas across ${covered} leg${covered === 1 ? "" : "s"})</span></div>
+    <div class="card big">${usd4(total)} <span class="mut" style="font-size:14px">USDC, after gas</span></div>
+    ${rows.length ? `<div class="card scroll"><table>
+      <tr><th class="l">token</th><th class="l">route</th><th>balance</th><th>net $</th><th>gas $</th><th>net after gas</th><th title="quoted output vs the pool's no-impact spot price (slippage/depth lens)">vs spot</th><th class="l">note</th></tr>
+      ${body}
+    </table>
+    <p class="mut" style="margin:12px 0 0">sorted by <b>net after gas</b> · gas @ ${ctx.gasWei.toString()} wei/leg
+      (${GAS_PER_LEG.toLocaleString()} gas/leg), ETH $${ctx.ethPrice.toFixed(0)} via ${esc(ctx.ethSrc)}</p>
+    <p class="mut">rows behind a better one still execute — the sort shows what each route is worth,
+      not an either/or choice.</p></div>` : `<div class="card mut">no dust found in the curated set.</div>`}
+    <div class="card">
+      <div class="row">
+        <button id="sweepbtn" ${canSweep ? "" : "disabled"}>${canSweep ? "Sweep " + n + " token" + (n === 1 ? "" : "s") + " → USDC" : "Sweep (needs wallet + sweeper)"}</button>
+        <span class="mut">${esc(setupNote)}</span>
+      </div>
+      <div id="out"></div>
+    </div>
+    <div class="card mut">
+      <div>address <span class="addr" style="display:inline-block;padding:4px 8px">${esc(user)}</span></div>
+      <div style="margin-top:8px">sweeper ${SWEEPER ? `<code>${esc(SWEEPER)}</code>` : "—"} · chain ${esc(C.name)} · zero fee</div>
+      <div style="margin-top:8px"><a href="?chain=${CHAIN_KEY === "base" ? "base_sepolia" : "base"}">switch chain ↻</a></div>
+    </div>`;
+  if (canSweep) document.getElementById("sweepbtn").onclick = () => doSweep(user, rows);
+  renderNotesEl(user);
+}
+
+function renderNotesEl(user) {
+  const el = document.getElementById("notes");
+  if (!el) return;
+  el.innerHTML = `<a href="#/">← new scan</a>`;
+}
+
+// =============================== sweep ==========================================================
+// sweep(address[] tokens, (uint8,address,address,uint24,address)[] hops, uint256[] minOut)
+// HopInput is a STATIC struct (uint8,address,address,uint24,address) => each hops element is 5 head
+// words, no inner offset. All three params are dynamic, so the head is three offsets.
+function encodeSweep(tokens, hops, minOut) {
+  const dyn = (words) => pad32(words.length) + words.join("");
+  const tokensEnc = dyn(tokens.map(addr32));
+  const minOutEnc = dyn(minOut.map((m) => pad32(m)));
+  const hopsEnc = dyn(hops.map((h) => pad32(h.venue) + addr32(h.tokenIn) + addr32(h.tokenOut) + pad32(h.fee) + addr32(h.venueRouter)));
+  const off1 = 3 * 32;
+  const off2 = off1 + tokensEnc.length / 2;
+  const off3 = off2 + hopsEnc.length / 2;
+  return SEL.sweep + pad32(off1) + pad32(off2) + pad32(off3) + tokensEnc + hopsEnc + minOutEnc;
+}
+
+async function doSweep(user, rows) {
+  const out = document.getElementById("out");
+  const btn = document.getElementById("sweepbtn");
+  // pick the best (highest net_after_gas) route per symbol; only pool routes are sweepable in v1
+  const byS = {};
+  for (const r of rows) if (r.venue === "pool" && r.net_after_gas != null && (byS[r.sym] == null || r.net_after_gas > byS[r.sym].net_after_gas)) byS[r.sym] = r;
+  const picks = Object.values(byS);
+  if (!picks.length) { out.innerHTML = "<p class='err'>no sweepable pool route</p>"; return; }
+
+  btn.disabled = true;
+  const step = (m) => { out.innerHTML = `<p class="mut">${esc(m)}</p>`; };
+  try {
+    const from = user;
+    // 1. setup: ERC20 -> Permit2, then Permit2.approve(sweeper) — only where missing
+    for (const r of picks) {
+      const a1 = BigInt("0x" + (await ethCall(r.token.addr, SEL.allowance + addr32(from) + addr32(PERMIT2))).replace(/^0x/, "").slice(0, 64));
+      if (a1 < r.bal) {
+        step(`approve ${r.sym} → Permit2…`);
+        await sendTx({ from, to: r.token.addr, data: SEL.approve20 + addr32(PERMIT2) + pad32(2n ** 256n - 1n) });
+      }
+      const a2 = await permit2Allowance(from, r.token.addr, SWEEPER);
+      if (a2 < r.bal) {
+        step(`approve ${r.sym} → sweeper (via Permit2)…`);
+        await sendTx({ from, to: PERMIT2, data: SEL.permit2Approve + addr32(r.token.addr) + addr32(SWEEPER) + pad32(2n ** 160n - 1n) + pad32(2n ** 48n - 1n) });
+      }
+    }
+    // 2. the sweep — one tx, minOut = 99.5% of quote (50 bps guard)
+    const tokens = picks.map((r) => r.token.addr);
+    const hops = picks.map((r) => ({ venue: 0, tokenIn: r.token.addr, tokenOut: USDC, fee: r.fee, venueRouter: C.swapRouter }));
+    const minOut = picks.map((r) => (r.out * 995n) / 1000n);
+    step(`sweeping ${picks.length} token(s)…`);
+    const hash = await sendTx({ from, to: SWEEPER, data: encodeSweep(tokens, hops, minOut) });
+    step(`submitted ${hash} — waiting for the receipt…`);
+    for (let i = 0; i < 90; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const rc = await rpc("eth_getTransactionReceipt", [hash]).catch(() => null);
+      if (rc && rc.blockNumber) {
+        const okTx = BigInt(rc.status) === 1n;
+        btn.disabled = false; btn.textContent = "Sweep again";
+        out.innerHTML = okTx
+          ? `<p class="pos">done — dust swept to USDC in your wallet. <a href="#" onclick="location.reload()">rescan</a></p>`
+          : `<p class="err">tx reverted — ${esc(hash)}</p>`;
+        return;
+      }
+    }
+    out.innerHTML = `<p class="mut">still pending: ${esc(hash)}</p>`;
+    btn.disabled = false;
+  } catch (e) {
+    btn.disabled = false;
+    out.innerHTML = `<p class="err">${esc(e.message || e)}</p>`;
+  }
+}
+
+// pick the best route per symbol but keep token refs on the row (scan() attaches them)
+async function permit2Allowance(owner, token, spender) {
+  // Permit2.allowance(address owner, address token, address spender) -> (uint160,uint48,uint48)
+  const ret = (await ethCall(PERMIT2, SEL.permit2Allowance + addr32(owner) + addr32(token) + addr32(spender))).replace(/^0x/, "");
+  return BigInt("0x" + ret.slice(0, 64));
+}
+async function sendTx({ from, to, data }) {
+  return window.ethereum.request({ method: "eth_sendTransaction", params: [{ from, to, data }] });
+}
+
+// =============================== boot ===========================================================
+window.scan = scan;
+(function boot() {
+  document.getElementById("chainbadge").textContent = C.name;
+  chainId().then((cid) => { document.getElementById("chainbadge").textContent = (cid === C.id ? "" : "chain " + cid + " ≠ ") + C.name; }).catch(() => {});
+  viewHome();
+})();
+</script>
+
+<div class="dx-foot">
+  <div class="dx-foot-in">
+    <div class="dx-foot-brand"><a href="../index.html">← DEX fleet</a>
+      <span>truth-only · every number read on-chain</span></div>
+    <nav class="dx-foot-nav" aria-label="All pages"><a href="../subscribe/index.html">Subscriptions</a><a href="../merchant/index.html">For merchants</a><a href="../g2b-escrow/index.html">Escrow</a><a href="../g2a-streams/index.html">Streams</a><a href="../f1a-payment-links/index.html">Payment links</a><a href="../p2-forwarder/index.html">Forwarder</a><a href="../p3-router/index.html">Swap router</a><a href="../g4b-receipts/index.html">Receipts</a><a href="../g3a-sponsorship/index.html">Gasless</a><a href="../f1c-duster/index.html">Dust → USDC</a><a href="../miniapp/index.html">Pay in-feed</a><a href="../fleet-executor/index.html">Executor</a><a href="../status/index.html">Status</a><a href="../security/index.html">Security</a><a href="../changelog/index.html">Changelog</a></nav>
+  </div>
+</div>
+</body>
+</html>

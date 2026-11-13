@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<!--
+  F1-a payment links — ONE static file, NO server, NO build step, NO third-party deps.
+  Hand-rolled ABI encode/decode (raw eth_call), matching the lane's "no OZ, no deps" style.
+
+  WHY IT IS SERVERLESS: the whole request lives ON-CHAIN. The URL carries (registry, id); the page
+  reads `request_(id)` from an RPC and renders. Nothing to host but this file.
+
+  ROUTES (hash-routed so `file://` also works):
+    #/new                              -> merchant: build a payment request
+    #/pay/<chainId>/<registry>/<id>    -> payer: THE SHAREABLE LINK (v2: chain-pinned).
+    #/pay/<registry>/<id>              -> legacy 2-segment link (no chain pin) still loads.
+
+  CONFIG via query: ?rpc=<url>  (defaults to Base MAINNET — a visitor is a real user, not a tester)
+
+  v2: the link CARRIES its chainId so a payer on a mainnet wallet opening a Sepolia link gets a
+  clear "wrong network" message, not a silent revert against an empty address. A legacy link (no
+  chain segment) still renders, just without the pin.
+
+  SCOPE (v1, matches contract): amount is a SOFT ask (displayed, not enforced); memo is a bytes32
+  order ref (hex in the URL). No expiry/refund. settle() is permissionless.
+-->
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pay — payment links</title>
+<style>
+  /* palette UNIFIED with the landing (dex-site/index.html) so the whole site reads as one system */
+  :root { --bg:#05080f; --fg:#e9eefb; --mut:#8fa0be; --card:#0b1222; --line:#18233a;
+          --acc:#4d94ff; --ok:#34d399; --warn:#fbbf24; --bad:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .wrap { max-width:640px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:18px; margin:0 0 4px; letter-spacing:.5px; }
+  .sub { color:var(--mut); font-size:13px; margin-bottom:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin:14px 0; }
+  label { display:block; color:var(--mut); font-size:12px; text-transform:uppercase;
+          letter-spacing:.6px; margin:14px 0 6px; }
+  input, select { width:100%; background:#0e1116; color:var(--fg); border:1px solid var(--line);
+                  border-radius:8px; padding:10px 12px; font:inherit; }
+  input:focus, select:focus { outline:none; border-color:var(--acc); }
+  button { background:var(--acc); color:#06131f; border:0; border-radius:8px; padding:11px 16px;
+           font:inherit; font-weight:700; cursor:pointer; margin-top:16px; }
+  button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:default; }
+  .big { font-size:26px; font-weight:700; margin:6px 0; }
+  .addr { overflow-wrap:anywhere; color:var(--fg); background:#0e1116; border:1px solid var(--line);
+          border-radius:8px; padding:12px; margin-top:6px; font-size:13px; }
+  .badge { display:inline-block; font-size:11px; padding:3px 8px; border-radius:999px;
+           border:1px solid var(--line); color:var(--mut); }
+  .badge.ok { color:var(--ok); border-color:var(--ok); }
+  .badge.warn { color:var(--warn); border-color:var(--warn); }
+  a { color:var(--acc); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .mut { color:var(--mut); font-size:13px; }
+  pre { background:#0e1116; border:1px solid var(--line); border-radius:8px; padding:12px;
+        overflow-x:auto; font-size:12px; }
+  .nav { margin-bottom:20px; font-size:13px; }
+  .err { color:var(--warn); }
+</style>
+<link rel="stylesheet" href="../_assets/theme.css">
+<link rel="icon" type="image/svg+xml" href="../_assets/favicon.svg">
+</head>
+<body>
+<!-- dx-chrome --><style>
+/* dx-chrome — shared, namespaced. Injected by chrome.py; do not hand-edit in built files. */
+.dx-top{position:relative;z-index:50;background:rgba(5,8,15,.72);backdrop-filter:blur(8px);border-bottom:1px solid #18233a}
+.dx-top-in{max-width:900px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px}
+.dx-home{display:inline-flex;align-items:center;gap:7px;font:600 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color:#e9eefb;text-decoration:none;padding:6px 2px}
+.dx-home:hover{color:#4d94ff}
+.dx-home .dx-arrow{color:#4d94ff}
+.dx-tag{font:500 12.5px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be;margin-left:auto}
+.dx-foot{position:relative;z-index:50;margin-top:56px;border-top:1px solid #18233a;background:rgba(5,8,15,.72)}
+.dx-foot-in{max-width:900px;margin:0 auto;padding:24px 20px 40px}
+.dx-foot-brand{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+.dx-foot-brand a{font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;text-decoration:none}
+.dx-foot-brand a:hover{color:#4d94ff}
+.dx-foot-brand span{font:500 12.5px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be}
+.dx-foot-nav{display:flex;gap:9px;flex-wrap:wrap}
+.dx-foot-nav a{font:600 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;
+  text-decoration:none;background:rgba(255,255,255,.04);border:1px solid #18233a;border-radius:999px;padding:7px 13px}
+.dx-foot-nav a:hover{border-color:#4d94ff;color:#4d94ff}
+@media(max-width:600px){.dx-tag{display:none}}
+</style>
+<div class="dx-top">
+  <div class="dx-top-in">
+    <a class="dx-home" href="../index.html"><span class="dx-arrow">←</span> DEX fleet</a>
+    <span class="dx-tag">non-custodial rails on Base</span>
+  </div>
+</div>
+<div class="wrap">
+  <div class="nav"><a href="#/new">+ new request</a></div>
+  <div id="app">loading…</div>
+  <p class="mut" style="margin-top:40px">
+    static page · reads the chain directly · no server, no account, no cookies
+  </p>
+</div>
+
+<!-- ── inline QR ─────────────────────────────────────────────────────────────────────
+     Byte-mode, ECC-L, versions 1–10, ZERO deps. The matrices are bit-exact against a
+     reference encoder (143 cases: forced masks, all versions, 120-payload fuzz) and
+     independently decode-verified (rendered → PNG → decoded). Renders to <canvas>.
+     Usage:  qrHTML(text, px)  -> canvas markup;  call drawQRs() after inserting it.
+──────────────────────────────────────────────────────────────────────────────────── -->
+<script src="../_assets/lib.js"></script>
+<script>
+(function (G) {
+  "use strict";
+  // GF(256), primitive 0x11d — Reed–Solomon over the QR field
+  var EXP = new Array(256), LOG = new Array(256);
+  (function () { var x = 1; for (var i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 0x100) x ^= 0x11d; } EXP[255] = EXP[0]; })();
+  function gmul(a, b) { return (a === 0 || b === 0) ? 0 : EXP[(LOG[a] + LOG[b]) % 255]; }
+  function rsGen(n) { var p = [1]; for (var i = 0; i < n; i++) { var r = new Array(p.length + 1).fill(0); for (var j = 0; j < p.length; j++) { r[j] ^= gmul(p[j], 1); r[j + 1] ^= gmul(p[j], EXP[i]); } p = r; } return p; }
+  function rsEcc(data, n) { var gen = rsGen(n), res = data.concat(new Array(n).fill(0)); for (var i = 0; i < data.length; i++) { var c = res[i]; if (c !== 0) for (var j = 1; j < gen.length; j++) res[i + j] ^= gmul(gen[j], c); } return res.slice(data.length); }
+
+  // per-version Reed–Solomon block structure, ECC-L only: [count, totalCw, dataCw]
+  var RS = { 1: [[1, 26, 19]], 2: [[1, 44, 34]], 3: [[1, 70, 55]], 4: [[1, 100, 80]], 5: [[1, 134, 108]],
+    6: [[2, 86, 68]], 7: [[2, 98, 78]], 8: [[2, 121, 97]], 9: [[2, 146, 116]], 10: [[2, 86, 68], [2, 87, 69]] };
+  var ALIGN = { 1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34], 7: [6, 22, 38], 8: [6, 24, 42], 9: [6, 26, 46], 10: [6, 28, 50] };
+  function dataCw(v) { var n = 0; RS[v].forEach(function (b) { n += b[0] * b[2]; }); return n; }
+  function byteCap(v) { return Math.floor((dataCw(v) * 8 - 4 - (v < 10 ? 8 : 16)) / 8); }
+
+  function bchDigit(x) { var d = 0; while (x !== 0) { d++; x >>>= 1; } return d; }
+  function formatBits(ecl, mask) { var data = (ecl << 3) | mask, d = data << 10; while (bchDigit(d) - bchDigit(0x537) >= 0) d ^= 0x537 << (bchDigit(d) - bchDigit(0x537)); return ((data << 10) | d) ^ 0x5412; }
+  function versionBits(v) { var d = v << 12; while (bchDigit(d) - bchDigit(0x1f25) >= 0) d ^= 0x1f25 << (bchDigit(d) - bchDigit(0x1f25)); return (v << 12) | d; }
+
+  function chooseVersion(n) { for (var v = 1; v <= 10; v++) if (n <= byteCap(v)) return v; throw new Error("qr: too long (" + n + " bytes)"); }
+
+  function codewords(text, version) {
+    var bytes = Array.prototype.slice.call(new TextEncoder().encode(text)), bits = [];
+    function put(val, len) { for (var i = len - 1; i >= 0; i--) bits.push((val >>> i) & 1); }
+    put(4, 4); put(bytes.length, version < 10 ? 8 : 16); bytes.forEach(function (c) { put(c, 8); });
+    var total = dataCw(version), cap = total * 8;
+    for (var i = 0; i < 4 && bits.length < cap; i++) bits.push(0);
+    while (bits.length % 8 !== 0) bits.push(0);
+    var data = []; for (var k = 0; k < bits.length; k += 8) { var x = 0; for (var j = 0; j < 8; j++) x = (x << 1) | bits[k + j]; data.push(x); }
+    var pad = [0xEC, 0x11], pi = 0; while (data.length < total) data.push(pad[pi++ % 2]);
+    var blocks = [], off = 0;
+    RS[version].forEach(function (blk) { for (var i = 0; i < blk[0]; i++) { var dd = data.slice(off, off + blk[2]); off += blk[2]; blocks.push({ d: dd, e: rsEcc(dd, blk[1] - blk[2]) }); } });
+    var out = [], maxD = Math.max.apply(null, blocks.map(function (b) { return b.d.length; }));
+    for (var i2 = 0; i2 < maxD; i2++) blocks.forEach(function (b) { if (i2 < b.d.length) out.push(b.d[i2]); });
+    var maxE = Math.max.apply(null, blocks.map(function (b) { return b.e.length; }));
+    for (var i3 = 0; i3 < maxE; i3++) blocks.forEach(function (b) { if (i3 < b.e.length) out.push(b.e[i3]); });
+    return out;
+  }
+
+  function blank(s) { var m = []; for (var i = 0; i < s; i++) m.push(new Array(s).fill(null)); return m; }
+  function finder(m, r, c) { for (var dr = -1; dr <= 7; dr++) for (var dc = -1; dc <= 7; dc++) { var rr = r + dr, cc = c + dc; if (rr < 0 || cc < 0 || rr >= m.length || cc >= m.length) continue; var on = (dr >= 0 && dr <= 6 && (dc === 0 || dc === 6)) || (dc >= 0 && dc <= 6 && (dr === 0 || dr === 6)) || (dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4); m[rr][cc] = on ? 1 : 0; } }
+  function align(m, cx, cy) { for (var dr = -2; dr <= 2; dr++) for (var dc = -2; dc <= 2; dc++) m[cy + dr][cx + dc] = (Math.max(Math.abs(dr), Math.abs(dc)) !== 1) ? 1 : 0; }
+  function reserved(s, version) {
+    var rm = blank(s).map(function (r) { return r.map(function () { return false; }); });
+    function mark(r, c, dim) { for (var dr = 0; dr < dim; dr++) for (var dc = 0; dc < dim; dc++) { var rr = r + dr, cc = c + dc; if (rr >= 0 && cc >= 0 && rr < s && cc < s) rm[rr][cc] = true; } }
+    mark(-1, -1, 9); mark(-1, s - 8, 9); mark(s - 8, -1, 9);
+    for (var i = 0; i < s; i++) { rm[6][i] = true; rm[i][6] = true; }
+    ALIGN[version].forEach(function (cy) { ALIGN[version].forEach(function (cx) { if ((cx === 6 && cy === 6) || (cx === 6 && cy === s - 7) || (cx === s - 7 && cy === 6)) return; mark(cy - 2, cx - 2, 5); }); });
+    for (var a = 0; a < 9; a++) { rm[8][a] = true; rm[a][8] = true; }
+    for (var b = 0; b < 8; b++) { rm[8][s - 1 - b] = true; rm[s - 1 - b][8] = true; }
+    rm[s - 8][8] = true;
+    if (version >= 7) for (var p = 0; p < 6; p++) for (var q = 0; q < 3; q++) { rm[s - 11 + q][p] = true; rm[p][s - 11 + q] = true; }
+    return rm;
+  }
+  function functions(m, version) {
+    var s = m.length;
+    finder(m, 0, 0); finder(m, 0, s - 7); finder(m, s - 7, 0);
+    for (var i = 8; i < s - 8; i++) { if (m[6][i] === null) m[6][i] = i % 2 === 0 ? 1 : 0; if (m[i][6] === null) m[i][6] = i % 2 === 0 ? 1 : 0; }
+    ALIGN[version].forEach(function (cy) { ALIGN[version].forEach(function (cx) { if ((cx === 6 && cy === 6) || (cx === 6 && cy === s - 7) || (cx === s - 7 && cy === 6)) return; align(m, cx, cy); }); });
+    for (var a = 0; a < 9; a++) { if (m[8][a] === null) m[8][a] = 0; if (m[a][8] === null) m[a][8] = 0; }
+    for (var b = 0; b < 8; b++) { if (m[8][s - 1 - b] === null) m[8][s - 1 - b] = 0; if (m[s - 1 - b][8] === null) m[s - 1 - b][8] = 0; }
+    m[s - 8][8] = 1;
+    if (version >= 7) { var vb = versionBits(version); for (var k = 0; k < 18; k++) { var bit = (vb >>> k) & 1, aa = Math.floor(k / 3), bb = k % 3; m[s - 11 + bb][aa] = bit; m[aa][s - 11 + bb] = bit; } }
+  }
+  function placeData(m, cw) {
+    var s = m.length, dir = -1, row = s - 1, col = s - 1, idx = 0, total = cw.length * 8;
+    function bitAt(i) { return i < total ? (cw[i >> 3] >>> (7 - (i & 7))) & 1 : 0; }
+    for (; col > 0; col -= 2) {
+      if (col === 6) col--;
+      for (;;) {
+        for (var c = 0; c < 2; c++) { var cc = col - c; if (m[row][cc] === null) m[row][cc] = bitAt(idx++); }
+        row += dir; if (row < 0 || row >= s) { row -= dir; dir = -dir; break; }
+      }
+    }
+  }
+  function maskFn(mask, r, c) {
+    switch (mask) {
+      case 0: return (r + c) % 2 === 0; case 1: return r % 2 === 0; case 2: return c % 3 === 0;
+      case 3: return (r + c) % 3 === 0; case 4: return (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0;
+      case 5: return ((r * c) % 2 + (r * c) % 3) === 0; case 6: return (((r * c) % 2 + (r * c) % 3) % 2) === 0;
+      case 7: return (((r + c) % 2 + (r * c) % 3) % 2) === 0;
+    }
+  }
+  function applyMask(m, mask, version) { var s = m.length, rm = reserved(s, version); for (var r = 0; r < s; r++) for (var c = 0; c < s; c++) if (!rm[r][c] && maskFn(mask, r, c)) m[r][c] ^= 1; }
+  function putFormat(m, ecl, mask) {
+    var s = m.length, bits = formatBits(ecl, mask); function bit(i) { return (bits >>> i) & 1; }
+    for (var i = 0; i <= 5; i++) m[i][8] = bit(i);
+    m[7][8] = bit(6); m[8][8] = bit(7); m[8][7] = bit(8);
+    for (var k = 9; k < 15; k++) m[8][14 - k] = bit(k);
+    for (var a = 0; a < 8; a++) m[8][s - 1 - a] = bit(a);
+    for (var b = 8; b < 15; b++) m[s - 15 + b][8] = bit(b);
+    m[s - 8][8] = 1;
+  }
+  // ISO/IEC 18004 mask penalty; lowest score wins (matches the reference encoder exactly)
+  function penalty(m) {
+    var s = m.length, p = 0, cont = new Array(s + 1).fill(0);
+    for (var r = 0; r < s; r++) { var prev = m[r][0], len = 0; for (var c = 0; c < s; c++) { if (m[r][c] === prev) len++; else { if (len >= 5) cont[len]++; len = 1; prev = m[r][c]; } } if (len >= 5) cont[len]++; }
+    for (var c2 = 0; c2 < s; c2++) { var pv = m[0][c2], ln = 0; for (var r2 = 0; r2 < s; r2++) { if (m[r2][c2] === pv) ln++; else { if (ln >= 5) cont[ln]++; ln = 1; pv = m[r2][c2]; } } if (ln >= 5) cont[ln]++; }
+    for (var l = 5; l <= s; l++) p += cont[l] * (l - 2);
+    for (var r3 = 0; r3 < s - 1; r3++) { var c3 = 0; while (c3 < s - 1) { var tr = m[r3][c3 + 1]; if (tr !== m[r3 + 1][c3 + 1]) { c3 += 2; continue; } if (tr !== m[r3][c3]) { c3 += 1; continue; } if (tr !== m[r3 + 1][c3]) { c3 += 1; continue; } p += 3; c3 += 1; } }
+    function L3(get) { var cnt = 0; for (var i = 0; i < s - 10; i++) { var o1 = !get(i + 1) && get(i + 4) && !get(i + 5) && get(i + 6) && !get(i + 9) && get(i) && get(i + 2) && get(i + 3) && !get(i + 7) && !get(i + 8) && !get(i + 10); var o2 = !get(i + 1) && get(i + 4) && !get(i + 5) && get(i + 6) && !get(i + 9) && !get(i) && !get(i + 2) && !get(i + 3) && get(i + 7) && get(i + 8) && get(i + 10); if (o1 || o2) { cnt++; if (get(i + 10)) i++; } } return cnt; }
+    for (var r4 = 0; r4 < s; r4++) p += 40 * L3(function (i) { return m[r4][i]; });
+    for (var c4 = 0; c4 < s; c4++) p += 40 * L3(function (i) { return m[i][c4]; });
+    var dark = 0; for (var r5 = 0; r5 < s; r5++) for (var c5 = 0; c5 < s; c5++) dark += m[r5][c5];
+    p += Math.floor(Math.abs(dark * 100 / (s * s) - 50) / 5) * 10;
+    return p;
+  }
+  function scoreMatrix(s, v, cw, mask) {
+    var m = blank(s); functions(m, v); placeData(m, cw); applyMask(m, mask, v); putFormat(m, 1, mask);
+    // reference scores in "test" mode: format/version/dark modules are zero while scoring
+    for (var i = 0; i <= 5; i++) m[i][8] = 0; m[7][8] = 0; m[8][8] = 0; m[8][7] = 0;
+    for (var k = 9; k < 15; k++) m[8][14 - k] = 0;
+    for (var a = 0; a < 8; a++) m[8][s - 1 - a] = 0;
+    for (var b = 8; b < 15; b++) m[s - 15 + b][8] = 0;
+    m[s - 8][8] = 0;
+    if (v >= 7) for (var p = 0; p < 6; p++) for (var q = 0; q < 3; q++) { m[s - 11 + q][p] = 0; m[p][s - 11 + q] = 0; }
+    return m;
+  }
+  function encode(text) {
+    var v = chooseVersion(Array.prototype.slice.call(new TextEncoder().encode(text)).length);
+    var cw = codewords(text, v), s = 4 * v + 17, best = 0, bestPen = Infinity;
+    for (var mk = 0; mk < 8; mk++) { var pen = penalty(scoreMatrix(s, v, cw, mk)); if (pen < bestPen) { bestPen = pen; best = mk; } }
+    var m = blank(s); functions(m, v); placeData(m, cw); applyMask(m, best, v); putFormat(m, 1, best);
+    return { size: s, version: v, matrix: m };
+  }
+
+  function escA(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
+  G.qrHTML = function (text, px) {
+    px = px || 200;
+    return '<canvas class="qr" data-qr="' + escA(text) + '" data-px="' + px +
+      '" style="width:' + px + 'px;height:' + px + 'px;background:#fff;border-radius:8px"></canvas>';
+  };
+  G.drawQRs = function (root) {
+    var nodes = (root || document).querySelectorAll("canvas[data-qr]:not([data-done])");
+    Array.prototype.forEach.call(nodes, function (cv) {
+      var text = cv.getAttribute("data-qr"), px = parseInt(cv.getAttribute("data-px") || "200", 10);
+      try {
+        var r = encode(text), s = r.size, quiet = 4, total = s + quiet * 2;
+        // size the BACKING STORE in whole device pixels so each module is an exact integer
+        // number of them — a 4px/module code scans; a fractional 3.4px one can fail at 1x.
+        var dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 4);
+        var scale = Math.max(2, Math.floor((px * dpr) / total));
+        var size = scale * total;
+        cv.width = size; cv.height = size;
+        var g = cv.getContext("2d");
+        g.fillStyle = "#fff"; g.fillRect(0, 0, size, size);
+        g.fillStyle = "#000";
+        for (var y = 0; y < s; y++) for (var x = 0; x < s; x++) if (r.matrix[y][x]) g.fillRect((x + quiet) * scale, (y + quiet) * scale, scale, scale);
+        cv.setAttribute("data-done", "1");
+      } catch (e) { cv.setAttribute("title", "qr: " + e.message); }
+    });
+  };
+})(window);
+</script>
+<script>
+"use strict";
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+
+
+// ---- config ------------------------------------------------------------------------------------
+// MAINNET by default — a stranger who opens this page is a real user, not a tester. Testnet is for us.
+// The RequestRegistry below is the MAINNET v2 (audit-fix) address; on Sepolia the same BARE string is
+// the v1 RR (chain-scoped, GOTCHAS #95). Override with ?registry=0x.. to point elsewhere.
+// ENDPOINT-POLICY: publicnode primary — base.org is 25 req/s soft-limited and 429s (-32007) under fan-out.
+const DEFAULT_RPC = "https://base-rpc.publicnode.com";
+const PARAMS = new URLSearchParams(location.search);
+const RPC = PARAMS.get("rpc") || DEFAULT_RPC;
+// LIVE F1-a RequestRegistry v2 (the contract THIS page calls on Base mainnet).
+// Override with ?registry=0x..  NB it is the RequestRegistry, NOT the P2 Registry it links to:
+// `request_()`/`request()`/`settle()` live on the F1-a layer. Pointing at the P2 Registry makes
+// `request_` revert (it has no such fn).
+const DEFAULT_REGISTRY = "0xeD395024Bba719564bec617b6b42CF6fDC8a252c";
+const REGISTRY = PARAMS.get("registry") || DEFAULT_REGISTRY;
+// USDC preset, BY CHAIN — a fixed const is DEAD on the other chain (mainnet USDC has no code on
+// Sepolia and vice-versa). Mainnet is the default; corrected to the live chain once chainId is read.
+const USDC_BY_CHAIN = {
+  8453:  "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",   // Base mainnet USDC (code-verified live)
+  84532: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",   // Base Sepolia USDC
+};
+let CHAIN_ID = 8453;                                   // updated when a chain is read; mainnet-first until then
+const usdcAddr = () => USDC_BY_CHAIN[CHAIN_ID] || USDC_BY_CHAIN[8453];
+// OPTIONAL chain-only "how much arrived" tally (v2 item 2). Set ?ledger=0x.. (a RequestLedger) to
+// show the on-chain received total for a request; unset and the field is simply absent.
+const LEDGER = PARAMS.get("ledger") || "";
+
+const SEL_REQUEST = "0xdc0edd60";        // request(address,address,uint256,bytes32)
+const SEL_P2_REGISTRY = "0x7d0f1201";    // RequestRegistry.p2Registry()(address) — the fee lives THERE
+const SEL_FEE_BPS = "0x24a9d853";        // Registry.feeBps()(uint16)
+const SEL_REQUEST_ = "0xf725c468";       // request_(uint256)
+const SEL_SETTLE = "0x8df82800";         // settle(uint256)
+const SEL_RECEIVED_FOR = "0xa907c94b";   // RequestLedger.receivedFor(address,uint256)
+// RequestCreated topic0. NB: the inner Registry `Registered` log has the SAME emitter, the SAME
+// topic COUNT (4), and is mined in the same tx — so matching on address+count alone grabs the wrong
+// log. Pin topic0. (Same class as the e2e logs[0] bug dex-critic flagged: key on topic, not index.)
+const TOPIC_REQUEST_CREATED = "0xdcccbbc2940366c80a1f99e80cdea677b9c170863f3cc2ccb124ef0f0e929d66";
+
+const app = document.getElementById("app");
+// render, then paint any QR canvases the view emitted (inline encoder lives in the block above)
+const $ = (h) => { app.innerHTML = h; try { drawQRs(app); } catch { /* qr is a nicety, never fatal */ } };
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// ---- tiny ABI codec (static types only — all we need) ------------------------------------------
+const word = (hex) => hex.padStart(64, "0");
+const pad32 = (v) => word(BigInt(v).toString(16));
+const addr32 = (a) => word(a.toLowerCase().replace(/^0x/, ""));
+const isAddr = (a) => /^0x[0-9a-fA-F]{40}$/.test(a || "");
+const short = (a) => a ? a.slice(0, 6) + "…" + a.slice(-4) : "";
+
+function decodeRequest(ret) {
+  // returns 10 static words: merchant,payer,destination,token,amount,memo,depositAddr,createdAt,settled,settledAt
+  const h = ret.replace(/^0x/, "");
+  if (h.length < 64 * 10) throw new Error("short return — is this a RequestRegistry?");
+  const w = (i) => h.slice(i * 64, (i + 1) * 64);
+  const A = (i) => "0x" + w(i).slice(24);
+  return {
+    merchant: A(0), payer: A(1), destination: A(2), token: A(3),
+    amount: BigInt("0x" + w(4)),
+    memo: "0x" + w(5),
+    depositAddr: A(6),
+    createdAt: Number(BigInt("0x" + w(7))),
+    settled: BigInt("0x" + w(8)) !== 0n,
+    settledAt: Number(BigInt("0x" + w(9))),
+  };
+}
+
+async function ethCall(to, data) {
+  const r = await _fetchT(RPC, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call",
+                           params: [{ to, data }, "latest"] }),
+  });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error.message || "rpc error");
+  return j.result;
+}
+
+// ---- chain identity ----------------------------------------------------------------------------
+// A payment link MUST show its network — the same deposit address is meaningless on another chain.
+// We read chainId from the RPC rather than trusting a label, and cross-check the registry is live.
+const KNOWN_CHAINS = { 84532: "Base Sepolia", 8453: "Base", 11155111: "Sepolia", 31337: "anvil (local)" };
+async function ethChainId() {
+  const r = await _fetchT(RPC, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }) });
+  CHAIN_ID = Number(BigInt((await r.json()).result));   // keep the USDC preset chain-correct
+  return CHAIN_ID;
+}
+
+// ---- human amounts -----------------------------------------------------------------------------
+// decimals: native = 18; a token's decimals need a call. We try decimals(); fall back to 6 with a note.
+async function tokenMeta(token) {
+  if (!isAddr(token) || /^0x0{40}$/.test(token)) return { sym: "native", dec: 18 };
+  let dec = 6, sym = "TOKEN";
+  try {
+    const d = await ethCall(token, "0x313ce567");                 // decimals()
+    dec = Number(BigInt(d));
+  } catch { /* keep fallback */ }
+  try {
+    const s = await ethCall(token, "0x95d89b41");                 // symbol() (string)
+    const len = Number(BigInt("0x" + s.slice(2, 66)));
+    const bytes = s.slice(66, 66 + len * 2);
+    sym = decodeURIComponent(bytes.replace(/../g, m => "%" + m).replace(/%00+$/, ""));
+  } catch { /* keep fallback */ }
+  if (token.toLowerCase() === usdcAddr().toLowerCase()) { dec = 6; sym = "USDC"; }
+  return { sym, dec };
+}
+const fmt = (n, dec) => {
+  const s = (Number(n) / 10 ** dec).toFixed(dec).replace(/0+$/, "").replace(/\.$/, "");
+  return s || "0";
+};
+
+// The forwarder's fee is read LIVE, not hardcoded: feeBps lives on the P2 Registry, which the
+// RequestRegistry exposes as an immutable. Walk registry -> p2Registry() -> feeBps(). The number has
+// ALREADY moved (25 -> 100 -> 500, owner-settable) so a literal would silently date (the same
+// stale-hardcode lesson as the p2 fork test). A read failure returns null and the copy stays neutral.
+async function liveFeeBps(registry) {
+  try {
+    const rr = await ethCall(registry, SEL_P2_REGISTRY);
+    const p2 = "0x" + rr.slice(-40);
+    if (!isAddr(p2) || /^0x0{40}$/.test(p2)) return null;
+    const fb = await ethCall(p2, SEL_FEE_BPS);
+    return Number(BigInt(fb) % (1n << 16n));
+  } catch { return null; }
+}
+
+// ---- views -------------------------------------------------------------------------------------
+
+function viewHome() {
+  $(`
+    <h1>payment links</h1>
+    <div class="sub">create a request, share a link, get paid. funds auto-forward on-chain.</div>
+    <div class="card">
+      <div class="mut">Paste a payment link, or open one from a merchant.</div>
+      <label>link or request</label>
+      <input id="jump" placeholder="#/pay/8453/0x…/0">
+      <button onclick="location.hash = document.getElementById('jump').value.trim().replace(/^#?/,'#') ">Open</button>
+    </div>
+    <div class="card">
+      <div class="mut">Merchant? <a href="#/new">Create a payment request →</a></div>
+    </div>`);
+}
+
+async function viewPay(registry, id, pinnedChain) {
+  $("<div class='card'>reading the chain…</div>");
+  if (!isAddr(registry)) return $("<div class='err'>bad registry in URL</div>");
+  // chainId FIRST: the RPC's chain must match the link's pin before we trust anything read from it.
+  let chainId = 0;
+  try { chainId = await ethChainId(); } catch { chainId = 0; }
+  const netHere = KNOWN_CHAINS[chainId] || ("chain " + chainId);
+  // no pin (legacy link) => the intended chain is simply whatever we are reading.
+  const netPinned = pinnedChain == null ? netHere : (KNOWN_CHAINS[pinnedChain] || ("chain " + pinnedChain));
+  const mismatch = pinnedChain != null && chainId !== 0 && chainId !== pinnedChain;
+
+  let r;
+  try {
+    r = decodeRequest(await ethCall(registry, SEL_REQUEST_ + pad32(id)));
+  } catch (e) {
+    // a WRONG-CHAIN read is the classic confusing failure: the address is empty/other on this RPC.
+    const hint = mismatch
+      ? `<div class="err" style="margin-top:6px">This link is for <b>${esc(netPinned)}</b> (chain
+         ${esc(pinnedChain)}) but the page is connected to <b>${esc(netHere)}</b>. Switch the ?rpc=
+         to a ${esc(netPinned)} node, or the request id lives on a registry you are not reading.</div>`
+      : "";
+    return $(`<div class="card"><div class="err">no such request (id ${esc(id)}) on
+      ${esc(short(registry))} (${esc(netHere)}): ${esc(e.message)}</div>${hint}</div>`);
+  }
+
+  const meta = await tokenMeta(r.token);
+  const feeBps = await liveFeeBps(registry);   // live, not a snapshot the copy used to carry
+  const feeTxt = feeBps == null ? "" : `${(feeBps / 100).toFixed(2).replace(/\.?0+$/, "")}%`;
+  const link = `#/pay/${chainId || ""}${chainId ? "/" : ""}${registry}/${id}`;   // chain-pinned (v2)
+  // v2 item 2: read the on-chain tally if a ledger is configured. Best-effort — a missing/other
+  // ledger must not blank the page (receivedFor reverts on an unknown id at a wrong registry).
+  let received = null;
+  if (isAddr(LEDGER)) {
+    try {
+      const d = await ethCall(LEDGER, SEL_RECEIVED_FOR + addr32(registry) + pad32(id));
+      received = BigInt("0x" + d.replace(/^0x/, "").slice(0, 64));
+    } catch { /* no tally readable — omit */ }
+  }
+  const settled = r.settled
+    ? `<span class="badge ok">settled</span>`
+    : `<span class="badge warn">awaiting payment</span>`;
+  const netBadge = `<span class="badge${mismatch ? " warn" : ""}">${esc(netHere)}</span>`;
+  const warn = mismatch
+    ? `<p class="err">⚠ this link is pinned to <b>${esc(netPinned)}</b>, but you are reading
+       <b>${esc(netHere)}</b>. The values below are from ${esc(netHere)} — add
+       <code>?rpc=&lt;${esc(netPinned)}&nbsp;node&gt;</code> to read the intended chain.</p>`
+    : "";
+
+  $(`
+    <h1>pay</h1>
+    <div class="sub">request #${esc(id)} · ${settled} · ${netBadge}</div>
+    <div class="card">
+      ${warn}
+      <div class="mut">amount requested</div>
+      <div class="big">${esc(fmt(r.amount, meta.dec))} ${esc(meta.sym)}</div>
+      ${received != null ? `<div class="mut">received so far
+        <b>${esc(fmt(received, meta.dec))} ${esc(meta.sym)}</b>
+        <span class="badge${received >= r.amount ? " ok" : " warn"}">${received >= r.amount ? "covered" : "partial"}</span></div>` : ""}
+      <div class="mut">order ref ${esc(r.memo)}</div>
+      <label>send to this deposit address — <b>TRANSFER</b>, no approve needed (a sink, not a pull)</label>
+      <div class="addr" id="dep">${esc(r.depositAddr)}</div>
+      <div class="row">
+        <button onclick="navigator.clipboard.writeText('${esc(r.depositAddr)}');this.textContent='copied'">Copy address</button>
+        <button class="ghost" onclick="navigator.clipboard.writeText('${esc(absLink(link))}');this.textContent='copied'">Copy link</button>
+        ${r.settled ? "" : `<button class="ghost" onclick="settleIt('${esc(registry)}','${esc(id)}',this)">Mark settled</button>`}
+      </div>
+      <div class="row" style="gap:18px;align-items:flex-start;margin-top:14px">
+        <div><div class="mut" style="margin-bottom:6px">scan to pay</div>${qrHTML(absLink(link), 200)}</div>
+        <div><div class="mut" style="margin-bottom:6px">address only</div>${qrHTML(r.depositAddr.toLowerCase(), 200)}</div>
+      </div>
+      <p class="mut" style="margin-top:10px">Status is on-chain and public: settle() is
+      permissionless, so the merchant, the payer, or a keeper may flip it once funds have moved.</p>
+      <p class="mut">Send <b>${esc(meta.sym)}</b> on <b>${esc(netPinned)}</b> to the address above — a
+      deposit on another network will not be seen. Anything that arrives auto-forwards to the
+      merchant, minus ${feeBps == null ? "a small" : `<b>${esc(feeTxt)}</b>`} fee
+      ${feeBps == null ? "(registry fee unread)" : `(${esc(feeBps)} bps, read live from the registry)`},
+      within ~1 block.</p>
+    </div>
+    <div class="card">
+      <div class="mut">details</div>
+      <div class="mut">merchant <span title="${esc(r.merchant)}">${esc(short(r.merchant))}</span></div>
+      <div class="mut">payer    <span title="${esc(r.payer)}">${esc(short(r.payer))}</span></div>
+      <div class="mut">registry <a href="?registry=${esc(registry)}${esc(link)}">${esc(short(registry))}</a></div>
+      <div class="mut">opened   ${r.createdAt ? new Date(r.createdAt * 1000).toISOString() : "?"}</div>
+    </div>`);
+}
+
+// A copyable absolute link that works even from file:// (where location.origin is "null").
+function absLink(hash) {
+  const base = location.origin === "null" ? location.href.replace(/#.*$/, "") : location.origin + location.pathname;
+  return base + location.search + hash;
+}
+
+async function viewNew() {
+  try { await ethChainId(); } catch { /* keep mainnet default for the preset */ }
+  $(`
+    <h1>new payment request</h1>
+    <div class="sub">one click mints a deposit address and a shareable link.</div>
+    <div class="card">
+      <label>destination (where you receive funds)</label>
+      <input id="dest" placeholder="0x… your receive address">
+      <label>token</label>
+      <select id="token">
+        <option value="0x0000000000000000000000000000000000000000">native (ETH)</option>
+        <option value="${usdcAddr()}" selected>USDC (preset)</option>
+        <option value="custom">other ERC20 address…</option>
+      </select>
+      <input id="tokenCustom" placeholder="0x… token address" style="display:none;margin-top:8px">
+      <label>amount (soft ask — displayed to the payer)</label>
+      <input id="amount" placeholder="10">
+      <label>memo / order ref (short, e.g. order-123)</label>
+      <input id="memo" placeholder="order-123">
+      <div class="row">
+        <button id="mk" onclick="createRequest()">Create request</button>
+        <button class="ghost" onclick="renderCast()">Show cast command</button>
+      </div>
+      <div id="out"></div>
+    </div>`);
+  const sel = document.getElementById("token");
+  sel.onchange = () => {
+    document.getElementById("tokenCustom").style.display = sel.value === "custom" ? "block" : "none";
+    renderCast();
+  };
+  document.getElementById("memo").oninput = renderCast;
+}
+
+function readForm() {
+  const tokenSel = document.getElementById("token").value;
+  const token = tokenSel === "custom"
+    ? document.getElementById("tokenCustom").value.trim()
+    : tokenSel;
+  const amountStr = document.getElementById("amount").value.trim() || "0";
+  const memoStr = document.getElementById("memo").value.trim() || "";
+  return {
+    dest: document.getElementById("dest").value.trim(),
+    token, amountStr, memoStr,
+    memoBytes32: memoToBytes32(memoStr),
+  };
+}
+
+// memo string -> bytes32 (right-padded utf8), matching what a merchant would pass as an order ref
+function memoToBytes32(s) {
+  const b = new TextEncoder().encode(s.slice(0, 32));
+  let hex = "";
+  for (const c of b) hex += c.toString(16).padStart(2, "0");
+  return "0x" + hex.padEnd(64, "0");
+}
+
+const amountToBase = (str, dec) => {
+  const [i, f = ""] = String(str).split(".");
+  return BigInt(i || "0") * 10n ** BigInt(dec) + BigInt((f + "0".repeat(dec)).slice(0, dec) || "0");
+};
+
+async function renderCast() {
+  const f = readForm();
+  const meta = await tokenMeta(f.token);
+  const amt = amountToBase(f.amountStr || "0", meta.dec);
+  const data = SEL_REQUEST + addr32(f.dest) + addr32(f.token) + pad32(amt) + f.memoBytes32.slice(2);
+  const out = document.getElementById("out");
+  if (!out) return;
+  out.innerHTML = `
+    <p class="mut">No wallet in this browser? Run this anywhere (works with <code>cast</code>):</p>
+    <pre>cast send ${esc(REGISTRY)} \\
+  "request(address,address,uint256,bytes32)" \\
+  ${esc(f.dest || "0x…")} ${esc(f.token)} ${amt} ${esc(f.memoBytes32.slice(0, 12))}… \\
+  --rpc-url ${esc(RPC)} --private-key $PRIVATE_KEY</pre>
+    <p class="mut">Call data: <span class="addr">${esc(data.slice(0, 74))}…</span>
+       (${esc(fmt(amt, meta.dec))} ${esc(meta.sym)})</p>`;
+}
+
+async function settleIt(registry, id, btn) {
+  const out = document.getElementById("out") || (() => { const d = document.createElement("div"); d.id = "out"; btn.parentNode.appendChild(d); return d; })();
+  if (!window.ethereum) {
+    out.innerHTML = `<p class="mut">No wallet in this browser. Run:<br>
+      <span class="addr">cast send ${esc(registry)} "settle(uint256)" ${esc(id)} --rpc-url ${esc(RPC)} --private-key $PRIVATE_KEY</span></p>`;
+    return;
+  }
+  btn.disabled = true; btn.textContent = "settling…";
+  try {
+    const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+    const data = SEL_SETTLE + pad32(id);
+    const tx = await window.ethereum.request({ method: "eth_sendTransaction",
+      params: [{ from: accounts[0], to: registry, data }] });
+    btn.textContent = "submitted";
+    out.innerHTML = `<p class="mut">settle submitted ${esc(tx)} — the badge flips once mined.</p>`;
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "Mark settled";
+    out.innerHTML = `<p class="err">${esc(e.message || e)}</p>`;
+  }
+}
+
+async function createRequest() {
+  const f = readForm();
+  const out = document.getElementById("out");
+  if (!isAddr(f.dest)) return out.innerHTML = `<p class="err">need a destination address</p>`;
+  if (!window.ethereum) {
+    out.innerHTML = `<p class="err">no injected wallet — use the cast command below</p>`;
+    return renderCast();
+  }
+  const meta = await tokenMeta(f.token);
+  const amt = amountToBase(f.amountStr || "0", meta.dec);
+  const data = SEL_REQUEST + addr32(f.dest) + addr32(f.token) + pad32(amt) + f.memoBytes32.slice(2);
+  out.innerHTML = `<p class="mut">confirm in your wallet…</p>`;
+  try {
+    const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+    // the wallet's own chainId — the link is PINNED to it, so a payer on another chain is warned.
+    let wchain = 0;
+    try { wchain = Number(BigInt(await window.ethereum.request({ method: "eth_chainId" }))); } catch {}
+    const tx = await window.ethereum.request({
+      method: "eth_sendTransaction",
+      params: [{ from: accounts[0], to: REGISTRY, data }],
+    });
+    out.innerHTML = `<p class="mut">submitted ${esc(tx)}<br>waiting for the receipt to read your link…</p>`;
+    // poll for the request id from the receipt's RequestCreated log
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const rc = await _fetchT(RPC, { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getTransactionReceipt", params: [tx] }) })
+        .then(r => r.json()).then(j => j.result).catch(() => null);
+      if (rc && rc.blockNumber) {
+        const log = rc.logs.find(l => l.address.toLowerCase() === REGISTRY.toLowerCase()
+                                   && l.topics[0] === TOPIC_REQUEST_CREATED);
+        if (log) {
+          const id = BigInt(log.topics[1]).toString();
+          // v2: pin the chain into the link when we know it (wallet chainId == the RPC chain here).
+          const link = wchain ? `#/pay/${wchain}/${REGISTRY}/${id}` : `#/pay/${REGISTRY}/${id}`;
+          out.innerHTML = `<p class="mut">created request #${esc(id)}</p>
+            <p><a href="${esc(link)}">Open the payment link →</a></p>
+            <p class="mut">share: <span class="addr">${esc(absLink(link))}</span></p>
+            <div class="row" style="gap:18px;align-items:flex-start;margin-top:14px">
+              <div><div class="mut" style="margin-bottom:6px">scan to pay</div>${qrHTML(absLink(link), 200)}</div>
+            </div>`;
+          drawQRs(out);
+          // (absLink handles file:// where location.origin is the string "null")
+          return;
+        }
+        out.innerHTML = `<p class="mut">mined, but no RequestCreated log found — open the tx: ${esc(tx)}</p>`;
+        return;
+      }
+    }
+    out.innerHTML = `<p class="mut">still pending: ${esc(tx)}</p>`;
+  } catch (e) {
+    out.innerHTML = `<p class="err">${esc(e.message || e)}</p>`;
+  }
+}
+
+// ---- router ------------------------------------------------------------------------------------
+function route() {
+  const h = location.hash || "#/";
+  // v2: chain-pinned link  #/pay/<chainId>/<registry>/<id>
+  const mc = h.match(/^#\/pay\/(\d+)\/(0x[0-9a-fA-F]{40})\/(\d+)$/);
+  if (mc) return viewPay(mc[2], mc[3], Number(mc[1]));
+  // legacy link (pre-v2)  #/pay/<registry>/<id> — still loads, no chain pin
+  const m = h.match(/^#\/pay\/(0x[0-9a-fA-F]{40})\/(\d+)$/);
+  if (m) return viewPay(m[1], m[2], null);
+  if (h.startsWith("#/new")) return viewNew();
+  return viewHome();
+}
+window.addEventListener("hashchange", route);
+window.renderCast = renderCast;      // used by inline handlers
+window.createRequest = createRequest;
+window.settleIt = settleIt;
+route();
+</script>
+
+<div class="dx-foot">
+  <div class="dx-foot-in">
+    <div class="dx-foot-brand"><a href="../index.html">← DEX fleet</a>
+      <span>truth-only · every number read on-chain</span></div>
+    <nav class="dx-foot-nav" aria-label="All pages"><a href="../subscribe/index.html">Subscriptions</a><a href="../merchant/index.html">For merchants</a><a href="../g2b-escrow/index.html">Escrow</a><a href="../g2a-streams/index.html">Streams</a><a href="../f1a-payment-links/index.html">Payment links</a><a href="../p2-forwarder/index.html">Forwarder</a><a href="../p3-router/index.html">Swap router</a><a href="../g4b-receipts/index.html">Receipts</a><a href="../g3a-sponsorship/index.html">Gasless</a><a href="../f1c-duster/index.html">Dust → USDC</a><a href="../miniapp/index.html">Pay in-feed</a><a href="../fleet-executor/index.html">Executor</a><a href="../status/index.html">Status</a><a href="../security/index.html">Security</a><a href="../changelog/index.html">Changelog</a></nav>
+  </div>
+</div>
+</body>
+</html>

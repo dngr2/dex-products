@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<!--
+  P3 — slippage-bounded swap router (NOT "MEV-protected": the contract cannot see how its tx was
+  submitted). ONE static file, NO server, NO build step, NO third-party deps.
+  Hand-rolled ABI encode/decode over raw eth_call, matching the lane's style (see g2b-escrow/frontend,
+  f1c-duster/frontend, p2-forwarder/frontend for the same convention).
+
+  WHAT IT DOES: the router aggregates EXISTING Uniswap-V3-family pools, holds no liquidity, keeps no
+  state between swaps. The route is chosen off-chain (the keeper's quote.py) and handed to the contract,
+  which executes the hops and takes a fee on the INPUT (5 bps on the old line, 500 bps on the relaunch
+  line — the value is read per chain, never assumed).
+
+  THE WHOLE POINT OF THIS PAGE: PROVE each per-chain address is the REAL router, not a same-string
+  impostor. RELAUNCH 2026-11-12: Base AND Optimism carry the NEW router at 0x036645cA… (one CREATE2
+  address, codehash-identical on both). The other EIGHT chains stay on the old line at 0x9651cD59… —
+  the same-string-different-contract trap (GOTCHAS #95). Worse, the string 0x9651cD59… is the P2
+  RequestRegistry on Base Sepolia (same deploy key, same nonce, different deploy order). So the page
+  does NOT trust the string: per chain it calls the router's own immutable getters — previewFee(10000)
+  must equal feeBps()'s own arithmetic for THAT chain, and p2Registry() must REVERT (only the router
+  lacks it; the RequestRegistry reverts on previewFee() instead). An address is "proved" only when
+  both reads agree with the intended contract.
+
+  HONESTY RULES THIS PAGE FOLLOWS:
+   1. The FEE is stated up front and read PER CHAIN: 500 bps on the relaunch line (Base, Optimism,
+      Unichain — currently the cap), 5 bps on the eight old-line chains. The page NEVER prints a number it did
+      not read live, and the expected value is never a flat literal.
+   2. An unreadable chain is its OWN state. A dead RPC renders "unreachable", NEVER a silent 0 or a
+      false "ok" (GOTCHAS #27/#112) — the spike failed the row, it did not zero it.
+   3. The accounting is split REALIZED vs ARMED and says "$0 until live flow" plainly: P3 has landed
+      exactly one fee (a smoke leg), so REALIZED is $0.00 and the fee stream is ARMED, not income.
+   4. Read-only: the whole page works with NO wallet. Nothing here is custodied.
+
+  ROUTE: hash-routed so file:// works:  #/  -> the registry + prover   #/?chain=base  -> focus a chain
+  CONFIG via query: ?rpc=<url> overrides the focused chain's RPC.
+-->
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P3 router — slippage-bounded swaps, proved per chain</title>
+<style>
+  /* palette UNIFIED with the landing (dex-site/index.html) so the whole site reads as one system */
+  :root { --bg:#05080f; --fg:#e9eefb; --mut:#8fa0be; --card:#0b1222; --line:#18233a;
+          --acc:#4d94ff; --ok:#34d399; --warn:#fbbf24; --bad:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .wrap { max-width:820px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:18px; margin:0 0 4px; letter-spacing:.5px; }
+  .sub { color:var(--mut); font-size:13px; margin-bottom:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin:14px 0; }
+  label { display:block; color:var(--mut); font-size:12px; text-transform:uppercase;
+          letter-spacing:.6px; margin:14px 0 6px; }
+  input, select { width:100%; background:#0e1116; color:var(--fg); border:1px solid var(--line);
+                  border-radius:8px; padding:10px 12px; font:inherit; }
+  input:focus, select:focus { outline:none; border-color:var(--acc); }
+  button { background:var(--acc); color:#06131f; border:0; border-radius:8px; padding:11px 16px;
+           font:inherit; font-weight:700; cursor:pointer; margin-top:16px; }
+  button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:default; }
+  .big { font-size:30px; font-weight:700; margin:6px 0; }
+  .addr { overflow-wrap:anywhere; background:#0e1116; border:1px solid var(--line);
+          border-radius:8px; padding:12px; margin-top:6px; font-size:13px; }
+  .badge { display:inline-block; font-size:11px; padding:3px 8px; border-radius:999px;
+           border:1px solid var(--line); color:var(--mut); }
+  .badge.ok { color:var(--ok); border-color:var(--ok); }
+  .badge.warn { color:var(--warn); border-color:var(--warn); }
+  .badge.bad { color:var(--bad); border-color:var(--bad); }
+  a { color:var(--acc); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .mut { color:var(--mut); font-size:13px; }
+  /* .mono wraps hex tokens (a 42-char address) that appear INSIDE running prose, where .addr's rule
+     does not reach: without this the unbreakable token pushed the honest-accounting card 2px past a
+     390px phone viewport. */
+  .mono { overflow-wrap:anywhere; }
+  details.how > summary { cursor:pointer; color:var(--fg); }
+  details.how > summary::marker { color:var(--acc); }
+  .howbody p { margin:12px 0 0; font-size:13px; color:var(--mut); line-height:1.6; }
+  .howbody b { color:var(--fg); }
+  .howbody i { color:var(--fg); font-style:normal; }
+  .err { color:var(--warn); }
+  .pos { color:var(--ok); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th { text-align:left; color:var(--mut); font-weight:400; font-size:11px; text-transform:uppercase;
+       letter-spacing:.5px; padding:6px; border-bottom:1px solid var(--line); }
+  td { text-align:left; padding:7px 6px; border-bottom:1px solid #191d24; overflow-wrap:anywhere; }
+  td.k { color:var(--mut); width:38%; }
+  pre { background:#0e1116; border:1px solid var(--line); border-radius:8px; padding:12px;
+        overflow-x:auto; font-size:12px; }
+  .nav { margin-bottom:20px; font-size:13px; display:flex; justify-content:space-between; }
+  .kv { display:grid; grid-template-columns:150px minmax(0,1fr); gap:4px 12px; font-size:13px; }
+  .kv .k { color:var(--mut); }
+</style>
+<link rel="stylesheet" href="../_assets/theme.css">
+<link rel="icon" type="image/svg+xml" href="../_assets/favicon.svg">
+</head>
+<body>
+<!-- dx-chrome --><style>
+/* dx-chrome — shared, namespaced. Injected by chrome.py; do not hand-edit in built files. */
+.dx-top{position:relative;z-index:50;background:rgba(5,8,15,.72);backdrop-filter:blur(8px);border-bottom:1px solid #18233a}
+.dx-top-in{max-width:900px;margin:0 auto;padding:11px 20px;display:flex;align-items:center;gap:14px}
+.dx-home{display:inline-flex;align-items:center;gap:7px;font:600 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  color:#e9eefb;text-decoration:none;padding:6px 2px}
+.dx-home:hover{color:#4d94ff}
+.dx-home .dx-arrow{color:#4d94ff}
+.dx-tag{font:500 12.5px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be;margin-left:auto}
+.dx-foot{position:relative;z-index:50;margin-top:56px;border-top:1px solid #18233a;background:rgba(5,8,15,.72)}
+.dx-foot-in{max-width:900px;margin:0 auto;padding:24px 20px 40px}
+.dx-foot-brand{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+.dx-foot-brand a{font:700 14px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;text-decoration:none}
+.dx-foot-brand a:hover{color:#4d94ff}
+.dx-foot-brand span{font:500 12.5px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8fa0be}
+.dx-foot-nav{display:flex;gap:9px;flex-wrap:wrap}
+.dx-foot-nav a{font:600 13px/1 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e9eefb;
+  text-decoration:none;background:rgba(255,255,255,.04);border:1px solid #18233a;border-radius:999px;padding:7px 13px}
+.dx-foot-nav a:hover{border-color:#4d94ff;color:#4d94ff}
+@media(max-width:600px){.dx-tag{display:none}}
+</style>
+<div class="dx-top">
+  <div class="dx-top-in">
+    <a class="dx-home" href="../index.html"><span class="dx-arrow">←</span> DEX fleet</a>
+    <span class="dx-tag">non-custodial rails on Base</span>
+  </div>
+</div>
+<div class="wrap">
+  <div class="nav">
+    <span><b>P3</b> <span class="mut">→ slippage-bounded swap router</span></span>
+    <span class="mut" id="chainbadge">…</span>
+  </div>
+  <div id="app">loading…</div>
+  <p class="mut" style="margin-top:40px">
+    static page · reads the chain directly · no server, no account, no cookies ·
+    <span>fee read per chain (500 bps relaunch line · 5 bps old line), on the input · $0 until live flow</span>
+  </p>
+</div>
+
+<script src="../_assets/lib.js"></script>
+<script>
+"use strict";
+// ── hard per-attempt fetch timeout (GOTCHAS #138/#147) ─────────────────────────────────────────
+// Without this a HUNG transport never rejects, so the retry/rotate path never engages and the boot
+// sits on its spinner forever. An abort REJECTS exactly like a network fault, so the EXISTING
+// retry path finally runs. Cleared in finally; never masks a real answer.
+
+
+// =============================== config =========================================================
+const PARAMS = new URLSearchParams(location.search);
+
+// The router address is NOT one address. Base was a phase-1 war-chest-key deploy; every other chain
+// got the exec-key deploy at nonce 1 — the same string-different-contract trap (GOTCHAS #95). The
+// page carries BOTH and proves each live, never trusting the string.
+//
+// Addresses are COPIED from files (GOTCHAS #73): base+optimism+arbitrum p3_router from
+// p3-router/keeper/quote.py CHAINS; the wave-2 set (scroll..gnosis) from p3-router/WAVE2-RUNBOOK.md §6
+// and KEY-RECORD-MAINNET.md, which record the same 0x9651cD59… on eight of them (OP moved to the
+// relaunch router, so optimism is no longer one). verify.mjs re-reads the
+// keeper table and asserts this page matches it byte-for-byte.
+const ROUTER_BASE = "0x036645cA607Dc8075Ae9B12A3474C00A82c306e6";   // new line: Base + Optimism + Unichain (one CREATE2 address, codehash-equal)
+const ROUTER_EXEC = "0x9651cD591cFe33E1b684e5d8541940e78724c749";   // the EIGHT un-redeployed chains (old line, still live)
+// Fee recipients are PER LINE, read live: the relaunch line pays the new feeRecipient; the eight
+// old-line routers are untouched and still pay the exposed key 0xe218…. A single treasury literal
+// asserted ONE address for all the chains and marked the entire old line "wrong" as a result.
+const TREASURY    = "0x5c0fc0917260A0656D253f1625053e3E6Dd2Ef3c";   // relaunch line fee recipient
+const TREASURY_OLD = "0xe218E382F28A094f9f64E903ee3cb1750A7f204B";  // old line (still the exposed key)
+const treasuryFor = (ch) => (FEE_BPS_BY_CHAIN[ch] !== undefined ? TREASURY : TREASURY_OLD);
+
+// chain name -> {id, rpc, router}. rpc values from WAVE2-RUNBOOK.md / quote.py (publicnode used for
+// Base because mainnet.base.org 429s getLogs on this box).
+const CHAINS = {
+  base:     { id: 8453,   rpc: "https://base-rpc.publicnode.com",      router: ROUTER_BASE },
+  optimism: { id: 10,     rpc: "https://mainnet.optimism.io",          router: ROUTER_BASE,
+              alts: ["https://optimism.publicnode.com", "https://optimism.drpc.org"] },
+  unichain: { id: 130,    rpc: "https://mainnet.unichain.org",         router: ROUTER_BASE,
+              alts: ["https://unichain-rpc.publicnode.com"] },
+  arbitrum: { id: 42161,  rpc: "https://arb1.arbitrum.io/rpc",         router: ROUTER_EXEC,
+              alts: ["https://arbitrum-one.publicnode.com"] },
+  scroll:   { id: 534352, rpc: "https://rpc.scroll.io",                router: ROUTER_EXEC,
+              alts: ["https://scroll.publicnode.com"] },
+  linea:    { id: 59144,  rpc: "https://rpc.linea.build",              router: ROUTER_EXEC },
+  mantle:   { id: 5000,   rpc: "https://rpc.mantle.xyz",               router: ROUTER_EXEC },
+  polygon:  { id: 137,    rpc: "https://polygon.drpc.org",             router: ROUTER_EXEC,
+              alts: ["https://polygon-bor-rpc.publicnode.com"] },
+  bsc:      { id: 56,     rpc: "https://bsc-dataseed.binance.org",     router: ROUTER_EXEC,
+              alts: ["https://bsc-rpc.publicnode.com"] },
+  opbnb:    { id: 204,    rpc: "https://opbnb-mainnet-rpc.bnbchain.org", router: ROUTER_EXEC },
+  gnosis:   { id: 100,    rpc: "https://rpc.gnosischain.com",          router: ROUTER_EXEC,
+              alts: ["https://gnosis-rpc.publicnode.com"] },
+};
+
+// A decoy, shown ON the page so the trap is visible: on Base Sepolia the SAME string 0x9651cD59… is
+// the P2 RequestRegistry (it answers p2Registry(), reverts on previewFee()). Proof that the address
+// string alone is not identity.
+const DECOY = { name: "base_sepolia", id: 84532, rpc: "https://sepolia.base.org",
+                string: ROUTER_EXEC, is: "P2 RequestRegistry (impostor of the string)" };
+
+// Venue config for a live quote, per chain, from quote.py CHAINS (univ3 quoter + WETH/USDC pair +
+// tiers). Only the chains the keeper's engine covers today; others still prove identity.
+const VENUE = {
+  base:     { quoter: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a", weth: "0x4200000000000000000000000000000000000006", usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              venueRouter: "0x2626664c2603336E57B271c5C0b26F421741e481", factory: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD" },
+  optimism: { quoter: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e", weth: "0x4200000000000000000000000000000000000006", usdc: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
+              venueRouter: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45", factory: "0x1F98431c8aD98523631AE4a59f267346ea31F984" },
+  arbitrum: { quoter: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e", weth: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", usdc: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+              venueRouter: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45", factory: "0x1F98431c8aD98523631AE4a59f267346ea31F984" },
+  scroll:   { quoter: "0x2566e082Cb1656d22BCbe5644F5b997D194b5299", weth: "0x5300000000000000000000000000000000000004", usdc: "0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4",
+              venueRouter: "0xfc30937f5cDe93Df8d48aCAF7e6f5D8D8A31F636", factory: "0x70C62C8b8e801124A4Aa81ce07b637A3e83cb919" },
+};
+const TIERS = [100, 500, 3000, 10000];
+
+// feeBps is PER-PHASE, asserted live per chain: the relaunch line (Base, Optimism, Unichain) is 500 bps —
+// currently the MAX_FEE_BPS cap — while the eight old-line chains are still at the original 5 bps.
+const FEE_BPS_BY_CHAIN = { base: 500n, optimism: 500n, unichain: 500n };
+const feeBpsFor = (ch) => FEE_BPS_BY_CHAIN[ch] ?? 5n;
+// FEE_BPS is the OLD-LINE default, kept as its own name because two harnesses destructure it and
+// because every one of the eight un-relaunched chains still answers exactly this.
+const FEE_BPS = 5n;
+
+const SEL = {
+  feeBps: "0x24a9d853",       // feeBps()
+  treasury: "0x61d027b3",     // treasury()
+  previewFee: "0x35e856f2",   // previewFee(uint256)
+  p2Registry: "0x7d0f1201",   // p2Registry() — present ONLY on the P2 RequestRegistry
+  quoteSingle: "0xc6a5026a",  // quoteExactInputSingle((address,address,uint256,uint24,uint160))
+  chainId: "0x313ce567",      // (unused placeholder)
+};
+// the swap entrypoint. NOTE this is NOT the UniV3-ShapeRouter selector (0xa89a546a) — the P3 Router's
+// signature nests a Hop ARRAY inside the params tuple, giving 0xd3bd0b52 (confirmed live in the router
+// CODE). DERIVED below (after `sig` exists), never typed.
+const SWAP_SIG = "swapExactTokensForTokens((uint256,uint256,(uint8,address,address,uint24,bool,address,address)[],address,uint256))";
+
+// =============================== codec ==========================================================
+const word = (h) => String(h).padStart(64, "0");
+const pad32 = (v) => word(BigInt(v).toString(16));
+const addr32 = (a) => word(a.toLowerCase().replace(/^0x/, ""));
+const isAddr = (a) => /^0x[0-9a-fA-F]{40}$/.test(a || "");
+const short = (a) => (a ? a.slice(0, 6) + "…" + a.slice(-4) : "");
+const hexToBig = (h) => BigInt(h && h !== "0x" ? h : "0x0");
+const fmt = (n, d, dp = 6) => {
+  const s = (Number(n) / 10 ** d).toFixed(Math.min(d, dp)).replace(/0+$/, "").replace(/\.$/, "");
+  return s === "" ? "0" : s;
+};
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---- keccak256 (Ethereum) in pure JS — VERIFIED against cast keccak for len 0..600 -------------
+// rate 136, pad 0x01..0x80 (Keccak, NOT SHA3). Used to DERIVE the selectors, never to type them.
+
+const utf8Hex = (s) => bytesToHex(new TextEncoder().encode(s));
+const sig = (s) => keccak256(utf8Hex(s)).slice(0, 10);   // 4-byte selector from the signature
+
+// the fee, mirroring the contract EXACTLY: floor(received * bps / 10000), taken on INPUT.
+function applyFee(amountIn, feeBps) {
+  const fee = (BigInt(amountIn) * BigInt(feeBps)) / 10000n;
+  return { fee, routed: BigInt(amountIn) - fee };
+}
+function encodePreviewFee(amount) { return SEL.previewFee + pad32(amount); }
+function encodeQuoteSingle(tokenIn, tokenOut, amount, fee) {
+  return SEL.quoteSingle + addr32(tokenIn) + addr32(tokenOut) + pad32(amount) + pad32(fee) + pad32(0);
+}
+SEL.swap = sig(SWAP_SIG);   // derived after `sig`; verify.mjs asserts this == cast sig AND the live code
+// FALSIFIABLE, and MOUNTED here on purpose (not just in a harness) — reproduce BOTH selectors by hand:
+//   cast sig "swapExactTokensForTokens((uint256,uint256,(uint8,address,address,uint24,bool,address,address)[],address,uint256))"
+//     -> 0xd3bd0b52   (ours: params tuple nesting a Hop[7])
+//   cast sig "swapExactTokensForTokens(((address,address,uint24,address,uint256,uint256,uint256,uint160,uint8)[]))"
+//     -> 0xa89a546a   <-- THE PLAUSIBLE TYPO
+// 0xa89a546a is the plausible typo because it is the shape you get copying a UniV3-style router: the
+// route is a flat array of 9 scalars, NOT a 7-field Hop struct with a `venue` enum head and a
+// stable/factory tail. Same FUNCTION NAME, same `swapExactTokensForTokens` — so both look right, and
+// only the DERIVED 4 bytes differ. `cast code <router>` greps settle it: 0xd3bd0b52 is PRESENT in the
+// deployed Base router code, 0xa89a546a is ABSENT (0 hits) — a plausible 4 bytes is not proof a
+// contract answers it. verify.mjs asserts SEL.swap == `cast sig` AND SEL.swap != 0xa89a546a AND the
+// presence/absence grep. Mutation teeth: swapping the hop field order reddens the
+// calldata==`cast calldata` assert; changing a hop token reddens the render==encoder assert.
+
+// ---- swap calldata: swapExactTokensForTokens(ExactInputParams) — BYTE-EXACT vs `cast calldata` ----
+// The params are ONE dynamic tuple {amountIn, amountOutMin, Hop[] hops, recipient, deadline}; the Hop
+// is a STATIC 7-field struct (venue,tokenIn,tokenOut,feeTier,stable,venueRouter,factory), so the ONLY
+// dynamism is the hops array inside the outer tuple. That offset nesting (head points to the tuple;
+// the tuple's head points to the array) is exactly the hand-rolled-encoder trap — encoded here by
+// hand, and asserted byte-identical to `cast calldata` in verify.mjs.
+//
+// amountIn is the FULL user input: the router pulls it, floors the fee INTERNALLY, and routes the
+// remainder — so the calldata amountIn is the gross, while the QUOTE runs on the post-fee routed
+// amount (two different numbers; the page shows both).
+function encodeSwap({ hop, amountIn, amountOutMin = 0n, recipient, deadline }) {
+  const hops = [hop];
+  const head = [];                       // the outer tuple's 5 static head words
+  head.push(pad32(amountIn));            // 0: amountIn
+  head.push(pad32(amountOutMin));        // 1: amountOutMin
+  head.push(pad32(5n * 32n));            // 2: offset to `hops` (relative to tuple start: 5*32)
+  head.push(addr32(recipient));          // 3: recipient
+  head.push(pad32(deadline));            // 4: deadline
+  const tup = head.join("") + pad32(hops.length) + hops.map(hopWord).join("");
+  return SEL.swap + pad32(32n) /* offset to the tuple (past this one head word) */ + tup;
+}
+// one Hop -> 7 static words, in the contract's struct order
+function hopWord(h) {
+  return pad32(h.venue) + addr32(h.tokenIn) + addr32(h.tokenOut) +
+         pad32(h.feeTier) + pad32(h.stable ? 1n : 0n) + addr32(h.venueRouter) + addr32(h.factory);
+}
+
+// =============================== rpc ============================================================
+const app = document.getElementById("app");
+const $ = (h) => { app.innerHTML = h; };
+
+async function rpcOn(url, method, params, tries = 3) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await _fetchT(url, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error.message || "rpc error");
+      if (j.result === undefined) throw new Error(j.message || `rpc ${r.status} (no result)`);
+      return j.result;
+    } catch (e) { last = e; if (i < tries - 1) await new Promise((s) => setTimeout(s, 400 * (i + 1))); }
+  }
+  throw last;
+}
+const chainIdOf = async (url) => Number(BigInt(await rpcOn(url, "eth_chainId", [])));
+
+// A per-chain probe returns ONE of three DISTINCT statuses (GOTCHAS #27): 'ok' (the getter answered
+// the expected value), 'wrong' (it answered something else), 'reverted' (eth_call reverted — the
+// impostor case), or 'unreachable' (transport failed — NEVER silently an ok/zero, GOTCHAS #112).
+async function probeCall(url, to, data) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return { status: "ok", value: await rpcOn(url, "eth_call", [{ to, data }, "latest"]) };
+    } catch (e) {
+      const m = String((e && e.message) || e);
+      // a REVERT is a real answer (the impostor's signature) — retrying won't change it.
+      if (/revert/i.test(m)) return { status: "reverted", value: null };
+      // a transport FAULT is not evidence of absence (GOTCHAS #121) — retry once, then report it as
+      // 'unreachable', NOT 'wrong'. A blip must never read as "this is a different contract".
+      if (attempt === 0) { await new Promise((r) => setTimeout(r, 250)); continue; }
+      return { status: "unreachable", value: null, err: m };
+    }
+  }
+}
+
+// The identity proof for ONE chain. Returns a verdict, never a bare number. The router is proved by
+// the TWO getters only IT has, and by the ONE only the impostor lacks:
+//   - feeBps() must answer the PER-CHAIN value  (500 relaunch line / 5 old line, below)
+//   - previewFee(10000) must MATCH that value   (the router's own arithmetic — GOTCHA #95's getter)
+//   - p2Registry() must REVERT                  (only the P2 RequestRegistry exposes it)
+//   - treasury() must answer the treasury address
+// A chain is 'proved' only when all four reads agree with the intended contract.
+async function proveChain(name, cfg) {
+  // pick a WORKING endpoint first (primary, then any alt) so a rate-limited primary does not cost us
+  // an honest row — and so all four probes below run against the SAME url (a mixed-url proof is a
+  // weaker proof). A bad chainId on a candidate disqualifies it for THIS chain (GOTCHAS #95).
+  const candidates = [cfg.rpc, ...(cfg.alts || [])];
+  let url = null, cid = null, lastErr = null;
+  for (const cand of candidates) {
+    try {
+      const c = await chainIdOf(cand);
+      if (c === cfg.id) { url = cand; cid = c; break; }
+      lastErr = `chainId ${c} ≠ ${cfg.id}`;
+    } catch (e) { lastErr = String((e && e.message) || e); }
+  }
+  if (!url) return { name, router: cfg.router, id: cfg.id, verdict: "unreachable",
+                     problems: ["rpc " + (lastErr || "unreachable")], feeBps: "—", previewAnswers: null };
+
+  const feeBps = await probeCall(url, cfg.router, SEL.feeBps);
+  if (feeBps.status === "unreachable") {
+    return { name, router: cfg.router, id: cfg.id, verdict: "unreachable",
+             problems: ["rpc " + (feeBps.err || "unreachable")], feeBps: "—", previewAnswers: null };
+  }
+  const preview = await probeCall(url, cfg.router, encodePreviewFee(10000n));
+  const reg = await probeCall(url, cfg.router, SEL.p2Registry);
+  const tre = await probeCall(url, cfg.router, SEL.treasury);
+  const r = { cid, feeBps, preview, reg, tre };
+  const problems = [];
+  const faults = [];   // transport FAILURES — "couldn't read", not "read something else" (GOTCHAS #121)
+  let wrong = false;
+
+  if (r.feeBps.status === "unreachable") { faults.push(`feeBps() ${r.feeBps.err || "unreachable"}`); }
+  else if (r.feeBps.status !== "ok") { wrong = true; problems.push(`feeBps() ${r.feeBps.status} — no code / not the router`); }
+  else { const want = feeBpsFor(name); if (hexToBig(r.feeBps.value) !== want) { wrong = true; problems.push(`feeBps() = ${hexToBig(r.feeBps.value)} ≠ ${want}`); } }
+
+  // previewFee() must ANSWER (not revert) — the impostor RequestRegistry has no previewFee(). A revert
+  // is a positive answer (wrong contract); an unreachable is a fault (can't tell).
+  if (r.preview.status === "unreachable") { faults.push(`previewFee() ${r.preview.err || "unreachable"}`); }
+  else if (r.preview.status !== "ok") { wrong = true; problems.push(`previewFee() ${r.preview.status} — the router has it`); }
+  else {
+    // previewFee(10000) and feeBps() must agree — floor(10000*bps/10000) is just bps, so the
+    // expectation comes from the same per-chain map. A same-string impostor would have to match
+    // THIS arithmetic too.
+    const expect = (10000n * feeBpsFor(name)) / 10000n;
+    if (hexToBig(r.preview.value) !== expect) { wrong = true; problems.push(`previewFee(10000) = ${hexToBig(r.preview.value)} ≠ ${expect}`); }
+  }
+  // p2Registry() must REVERT — only the P2 RequestRegistry exposes it (GOTCHA #95's discriminator).
+  if (r.reg.status === "unreachable") { faults.push(`p2Registry() ${r.reg.err || "unreachable"}`); }
+  else if (r.reg.status !== "reverted") { wrong = true; problems.push(`p2Registry() did NOT revert (status ${r.reg.status}) — this is the P2 Registry, not the router`); }
+
+  if (r.tre.status === "unreachable") { faults.push(`treasury() ${r.tre.err || "unreachable"}`); }
+  else if (r.tre.status === "ok" && ("0x" + r.tre.value.slice(-40)).toLowerCase() !== treasuryFor(name).toLowerCase()) {
+    wrong = true; problems.push(`treasury() = 0x${r.tre.value.slice(-40)} ≠ ${treasuryFor(name)}`);
+  }
+  if (r.cid != null && r.cid !== cfg.id) { wrong = true; problems.push(`rpc chainId ${r.cid} ≠ configured ${cfg.id}`); }
+
+  // A CONTRADICTION beats a fault: 'wrong' if anything answered something else; else 'unreachable' if
+  // any probe could not be read (an honest "couldn't tell", NOT silently folded into 'proved').
+  const verdict = wrong ? "wrong" : (faults.length ? "unreachable" : "proved");
+  if (faults.length) problems.push(...faults);
+
+  return { name, router: cfg.router, id: cfg.id, cid: r.cid, verdict, problems,
+           feeBps: r.feeBps.status === "ok" ? hexToBig(r.feeBps.value).toString() : "—",
+           previewAnswers: r.preview ? r.preview.status === "ok" : null,
+           previewRead: r.preview && r.preview.status === "ok" ? hexToBig(r.preview.value).toString() : null,
+           registryReverts: r.reg ? r.reg.status === "reverted" : null,
+           treasuryMatch: r.tre.status === "ok"
+             ? ("0x" + r.tre.value.slice(-40)).toLowerCase() === treasuryFor(name).toLowerCase()
+             : (r.tre.status === "reverted" ? false : null),
+           treasuryRead: r.tre.status === "ok" ? "0x" + r.tre.value.slice(-40) : r.tre.status };
+}
+
+// =============================== views ==========================================================
+async function viewHome() {
+  $("<div class='card'>reading chain ids…</div>");
+
+  // chain selection
+  const names = Object.keys(CHAINS);
+  const focus = PARAMS.get("chain") && CHAINS[PARAMS.get("chain")] ? PARAMS.get("chain") : "base";
+  const cfg = { ...CHAINS[focus] };
+  if (PARAMS.get("rpc")) cfg.rpc = PARAMS.get("rpc");
+
+  app.innerHTML = `
+    <h1>P3 router</h1>
+    <div class="sub">a swap router that aggregates existing Uniswap-V3-family pools, holds no liquidity,
+      and takes a flat fee on the input. deployed on <b>11 EVM chains</b>. the route is chosen off-chain;
+      the contract executes it. this page proves each per-chain address is the real router.</div>
+
+    <div class="card">
+      <div class="row"><b>the address is not one address</b>
+        <span class="badge warn">same string ≠ same contract</span></div>
+      <p class="mut" style="margin:10px 0 0">Base fired from the phase-1 war-chest key; every other chain
+        from the exec key. Since the 2026-11-12 relaunch that produces <b>two</b> distinct routers, and
+        the split is by LINE, not by one chain: Base, Optimism and Unichain carry the new line, the eight
+        un-redeployed chains still the old one. Both are proved live below:</p>
+      <div class="kv" style="margin-top:10px">
+        <div class="k">relaunch line (Base, OP, Unichain)</div>
+        <div><span class="addr" style="display:inline;padding:2px 6px">${esc(ROUTER_BASE)}</span>
+          <span class="mut">— one CREATE2 address, codehash-identical on all three; fee 500 bps</span></div>
+        <div class="k">old line (eight chains)</div>
+        <div><span class="addr" style="display:inline;padding:2px 6px">${esc(ROUTER_EXEC)}</span>
+          <span class="mut">— same string on Arb, Scroll, Linea, Mantle, Polygon, BSC, opBNB, Gnosis; fee 5 bps, still the exposed treasury</span></div>
+      </div>
+      <p class="mut" style="margin-top:10px">The page never trusts the string: each row below is proved by
+        the router's own getters, and a same-string impostor on Base Sepolia is shown failing the same
+        proof.</p>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>per-chain identity proof</b>
+        <span class="mut">— live reads, no wallet</span></div>
+      <table><thead><tr><th>chain</th><th>router</th><th>feeBps</th><th>previewFee — p2Registry</th><th>verdict</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="5" class="mut">probing 11 chains…</td></tr></tbody></table>
+      <p class="mut" style="margin-top:10px">A row is <b>proved</b> only when <code>feeBps()</code> equals its
+        per-chain expectation (<b>500</b> = 5&nbsp;% on the relaunched base/optimism, <b>5</b> = 0.05&nbsp;% on the
+        un-redeployed chains) and
+        <code>treasury()</code> matches AND the router's own <code>previewFee(10000)</code> <b>answers that same
+        number</b>
+        while <code>p2Registry()</code> <b>REVERTS</b> — the getter the router has that the P2 Registry
+        (its same-string twin on Base Sepolia) does not, and the one the router lacks that the Registry
+        has. An unreachable chain renders <b>unreachable</b> — never a silent 0
+        (<span class="mut">GOTCHAS #27/#112</span>).</p>
+      <div id="decoynote"></div>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>the fee</b><span class="badge" id="feebadge">…</span></div>
+      <div class="big" id="feebig">…</div>
+      <p class="mut" style="margin:6px 0 0">taken on the <b>input</b>, floored. Mirrors the contract's
+        <code>floor(received * feeBps / 10_000)</code> exactly — the same arithmetic <code>previewFee()</code>
+        runs on-chain. The headline above is DERIVED from the live getters, not typed.
+        Nothing is taken on a reverting swap (the fee moves only after the input lands).
+        Fee recipient: <span class="addr" style="display:inline;padding:2px 6px">${esc(treasuryFor(focus))}</span>
+        <span class="mut">(per line: the relaunch line pays the new feeRecipient, the old line still pays the
+        exposed key).</span></p>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>honest accounting</b><span class="badge">REALIZED ≠ ARMED</span></div>
+      <div class="kv" style="margin-top:12px">
+        <div class="k">REALIZED</div><div><b>$0.00</b> — one fee has landed (a smoke leg, not external flow)</div>
+        <div class="k">ARMED</div><div>the fee stream — worth its <i>usd</i> only once real flow routes through</div>
+        <div class="k">ledger row</div><div>p3-router · REALIZED · $0.00 · LIVE mark</div>
+      </div>
+      <p class="mut" style="margin-top:10px"><b>$0 until live flow.</b> A landed fee is an EVENT; the
+        headline counts REALIZED rows only. The router is live on 11 chains, but no
+        external volume has routed through it — so the honest number is zero, stated plainly.
+        <b>Two lines, not one address:</b> the current generation (<span class="mono">${esc(ROUTER_BASE)}</span>)
+        is on Base + Optimism + Unichain; the eight other chains still run the previous generation
+        (<span class="mono">${esc(ROUTER_EXEC)}</span>). Each row below probes the address that chain
+        actually has, and a chain serving no code reads as such rather than as a pass.</p>
+    </div>
+
+    <details class="card how" open>
+      <summary><b>live quote</b> <span class="mut">— ${esc(focus)} · WETH→USDC, through the real venue</span></summary>
+      <div class="howbody" id="quotes">
+        <label>chain</label>
+        <select id="qchain">${names.map((n) => `<option value="${n}"${n === focus ? " selected" : ""}>${esc(n)}</option>`).join("")}</select>
+        <label>amount in (WETH)</label><input id="qamt" value="0.01">
+        <button id="qbtn">Quote</button>
+        <div id="qout"></div>
+      </div>
+    </details>
+
+    <details class="card how">
+      <summary><b>how it works</b> <span class="mut">— what this does, and what it does not</span></summary>
+      <div class="howbody">
+        <p><b>What it does.</b> You approve a token and call <code>swapExactTokensForTokens</code> with a
+          route. The router pulls your input, floors the fee to the treasury, then executes each hop on
+          the venue you named (a Uniswap-V3 family router or Aerodrome). It holds no liquidity and keeps
+          no state between swaps, so there is nothing to drain from it.</p>
+        <p><b>What "slippage-bounded" means (and where the "MEV" story is honest).</b> The route is chosen OFF-CHAIN by the keeper's quote
+          engine (it walks the fee tiers through Multicall3 and picks the best), so the hop set is a
+          caller input, not a contract table. <i>The contract itself cannot know how its tx was
+          submitted</i> — private-submission is the keeper's choice, not Solidity. That is stated, not
+          implied.</p>
+        <p><b>Why the address proof matters.</b> A well-formed address that is the wrong contract is the
+          classic silent failure. The string <span class="addr" style="display:inline;padding:2px 6px">${esc(short(ROUTER_EXEC))}</span>
+          is the router on eight chains — but the P2 RequestRegistry on Base Sepolia (same key, same
+          nonce, different deploy order). So the page calls a getter only the router answers and asserts
+          one only the router lacks. Identity by behaviour, not by look.</p>
+        <p><b>What it does not do (v1).</b> One route per swap, chosen off-chain — the contract does not
+          search. No native ETH (ERC-20 in, ERC-20 out). The <code>venueRouter</code> is a caller-trusted
+          input per hop, so a bad quote engine can name a bad venue. Fee and treasury are immutable at
+          deploy (no admin key); a fee change is a redeploy.</p>
+      </div>
+    </details>`;
+
+  // prove every chain (in parallel), then render the sorted table once
+  const rows = document.getElementById("rows");
+  const results = await Promise.all(Object.entries(CHAINS).map(([name, c]) => proveChain(name, c)));
+  // the fee headline is DERIVED from the live proofs — never a typed string. Two values are EXPECTED
+  // since the relaunch (the new line is at the cap, the old line still at the original rate), so a
+  // second distinct value is not a "disagreement": say which line each value belongs to, from the
+  // chains' own configuration. Only a value that matches NEITHER line's configuration is a conflict.
+  const proved = results.filter((r) => r.verdict === "proved");
+  const feeEl = document.getElementById("feebig");
+  if (!proved.length) {
+    feeEl.innerHTML = `<span class="err">unreadable</span>`;
+  } else {
+    const lines = [[ROUTER_BASE, "relaunch line"], [ROUTER_EXEC, "old line"]];
+    const parts = lines.map(([addr, label]) => {
+      const rs = proved.filter((r) => r.router === addr);
+      if (!rs.length) return null;
+      const bps = [...new Set(rs.map((r) => r.feeBps))];
+      return bps.length === 1
+        ? `${esc(bps[0])} bps <span class="mut">(${label}, ${rs.length} chain${rs.length === 1 ? "" : "s"})</span>`
+        : `<span class="err">${esc(bps.join("/"))} bps (${label} — disagreement)</span>`;
+    }).filter(Boolean);
+    feeEl.innerHTML = parts.length ? parts.join(" · ") : `<span class="err">unreadable</span>`;
+  }
+  document.getElementById("feebadge").innerHTML = proved.length
+    ? `<span class="ok">live, read per chain: ${esc([...new Set(proved.map((r) => r.feeBps))].join("/"))} bps on ${proved.length}/${results.length} chains</span>`
+    : `<span class="err">no chain readable</span>`;
+  const rowHtml = (r) => {
+    const cls = r.verdict === "proved" ? "ok" : r.verdict === "unreachable" ? "warn" : "bad";
+    return `<tr>
+      <td>${esc(r.name)} <span class="mut">#${r.id}</span></td>
+      <td>${esc(r.router)}${r.router === ROUTER_BASE ? ' <span class="badge warn">base</span>' : ""}</td>
+      <td>${esc(r.feeBps)}</td>
+      <td>${r.previewAnswers === true ? `<span class='ok'>${esc(String(r.previewRead))}</span>` : "<span class='bad'>no</span>"} &#47;${r.registryReverts === true ? "<span class='ok'>reverts</span>" : "<span class='bad'>answers</span>"}</td>
+      <td><span class="badge ${cls}">${esc(r.verdict)}</span>${r.problems && r.problems.length ? " <span class='mut'>" + esc(r.problems[0]) + "</span>" : ""}</td>
+    </tr>`;
+  };
+  rows.innerHTML = results.sort((a, b) => a.name.localeCompare(b.name)).map(rowHtml).join("");
+
+  // the on-page decoy — a live demonstration that the STRING is not identity
+  const decoyCfg = { id: DECOY.id, rpc: DECOY.rpc, router: DECOY.string };
+  const d = await proveChain(DECOY.name, decoyCfg);
+  const dReg = await probeCall(DECOY.rpc, DECOY.string, SEL.p2Registry);
+  const dFee = await probeCall(DECOY.rpc, DECOY.string, SEL.feeBps);
+  const dPre = await probeCall(DECOY.rpc, DECOY.string, encodePreviewFee(10000n));
+  const s = (x) => x.status === "ok" ? "<span class='ok'>answers</span>" : x.status === "reverted" ? "<span class='bad'>reverts</span>" : "<span class='err'>" + esc(x.status) + "</span>";
+  document.getElementById("decoynote").innerHTML = `
+    <div class="card" style="margin-top:14px">
+      <div class="row"><span class="badge bad">decoy · the trap, live</span>
+        <span class="mut">same string — a DIFFERENT contract — on ${esc(DECOY.name)} (#${DECOY.id})</span></div>
+      <p class="mut" style="margin:8px 0 0">The string <span class="addr" style="display:inline;padding:2px 6px">${esc(DECOY.string)}</span>
+        on Base Sepolia is the <b>${esc(DECOY.is)}</b>, not the router:
+        <code>p2Registry()</code> ${s(dReg)} ${dReg.status === "ok" ? "(0x" + esc(dReg.value.slice(-40).slice(0, 10)) + "…)" : ""},
+        <code>feeBps()</code> ${s(dFee)}, <code>previewFee()</code> ${s(dPre)}.
+        So the router's proof <b>fails</b> on this address (verdict
+        <span class="badge ${d.verdict === "proved" ? "ok" : "bad"}">${esc(d.verdict)}</span>) —
+        which is the whole reason the page reads getters instead of trusting a pasted address.</p>
+    </div>`;
+
+  document.getElementById("qchain").onchange = () => { const u = new URL(location.href); u.searchParams.set("chain", document.getElementById("qchain").value); location.search = u.search; };
+  document.getElementById("qbtn").onclick = () => doQuote(document.getElementById("qchain").value, document.getElementById("qamt").value);
+  // AWAIT the initial quote so the render is deterministic (a fire-and-forget call races any driver).
+  await doQuote(focus, "0.01");
+}
+
+async function doQuote(name, amtStr) {
+  const out = document.getElementById("qout");
+  const v = VENUE[name];
+  if (!v) { out.innerHTML = `<p class="mut">no venue config on this page for <b>${esc(name)}</b> yet — identity is still proved above. add it to the keeper's quote.py table.</p>`; return; }
+  let amt;
+  try { amt = BigInt(Math.round(Number(amtStr) * 10 ** 18)); } catch { }
+  if (!amt || amt <= 0n) { out.innerHTML = "<p class='err'>bad amount</p>"; return; }
+  out.innerHTML = "<p class='mut'>quoting…</p>";
+  const cfg = CHAINS[name];
+  const f = applyFee(amt, Number(feeBpsFor(name)));
+  // quote the POST-FEE amount (what actually hits the pool), walking tiers — same as the keeper.
+  let best = null, lastErr = null;
+  for (const t of TIERS) {
+    try {
+      const r = await rpcOn(cfg.rpc, "eth_call", [{ to: v.quoter, data: encodeQuoteSingle(v.weth, v.usdc, f.routed, t) }, "latest"]);
+      const amtOut = hexToBig("0x" + r.replace(/^0x/, "").slice(0, 64));
+      if (amtOut > 0n && (!best || amtOut > best.amtOut)) best = { amtOut, tier: t };
+    } catch (e) { lastErr = e; }
+  }
+  const feeHuman = fmt(f.fee, 18), routedHuman = fmt(f.routed, 18);
+  // build the swap calldata for the winning route (venue enum 0 = UniV3; Aerodrome is Base-only and
+  // the page quotes UniV3 tiers, so the hop is a UniV3 hop — the contract ignores the unused branch).
+  let swap = "", approve = "";
+  if (best) {
+    const hop = { venue: 0, tokenIn: v.weth, tokenOut: v.usdc, feeTier: best.tier, stable: false,
+                  venueRouter: v.venueRouter, factory: v.factory };
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
+    swap = encodeSwap({ hop, amountIn: amt, recipient: "0x0000000000000000000000000000000000000000", deadline });
+    approve = "0x095ea7b3" + addr32(cfg.router) + pad32(amt);   // approve(router, amountIn)
+  }
+  out.innerHTML = `
+    <div class="card" style="margin-top:14px">
+      <div class="kv">
+        <div class="k">route</div><div>${esc(name)} · WETH → USDC · ${best ? "univ3 tier " + best.tier : "<span class='err'>no live pool answered</span>"}</div>
+        <div class="k">input</div><div>${esc(fmt(amt, 18))} WETH</div>
+        <div class="k">fee (${esc(String(feeBpsFor(name)))} bps, on input)</div><div>${esc(feeHuman)} WETH → treasury</div>
+        <div class="k">routed</div><div>${esc(routedHuman)} WETH hits the pool</div>
+        <div class="k">quoted out</div><div>${best ? "<b>" + esc(fmt(best.amtOut, 6)) + " USDC</b>" : "—"}</div>
+      </div>
+      ${best ? `
+      <p class="mut" style="margin:12px 0 4px"><b>two steps to swap</b> — same numbers, ready to paste:</p>
+      <div class="kv">
+        <div class="k">1 · approve</div><div class="mono">WETH.approve(<span class="addr">${esc(cfg.router)}</span>, ${esc(fmt(amt, 18))})</div>
+        <div class="k">2 · swap</div><div class="mono">router.swapExactTokensForTokens(...) → you</div>
+      </div>
+      <details style="margin-top:6px"><summary class="mut">calldata (swap, byte-identical to <code>cast calldata</code>)</summary>
+        <div class="mono" style="overflow-wrap:anywhere;margin-top:6px">${esc(swap)}</div>
+        <div class="mut" style="margin-top:6px">amountIn is the FULL input — the router floors the fee internally and routes the rest (the quote above is on the post-fee amount).</div>
+      </details>
+      <details style="margin-top:4px"><summary class="mut">calldata (approve)</summary>
+        <div class="mono" style="overflow-wrap:anywhere;margin-top:6px">${esc(approve)}</div>
+      </details>` : ""}
+      <p class="mut" style="margin-top:8px">fee mirrored locally as <code>floor(input × 5 / 10000)</code> —
+        the same arithmetic <code>previewFee()</code> runs; the page asserts they agree per chain above.
+        ${best ? "" : `<span class="err">(${esc(lastErr && lastErr.message || "venue unreachable")})</span>`}</p>
+    </div>`;
+}
+
+// =============================== boot ===========================================================
+(function boot() {
+  const route = () => viewHome();
+  window.onhashchange = route;
+  route();
+})();
+
+// expose for the verify + e2e harnesses
+globalThis.CHAINS = CHAINS;
+globalThis.VENUE = VENUE;
+globalThis.ROUTER_BASE = ROUTER_BASE;
+globalThis.ROUTER_EXEC = ROUTER_EXEC;
+globalThis.TREASURY = TREASURY;
+globalThis.TREASURY_OLD = TREASURY_OLD;
+globalThis.treasuryFor = treasuryFor;
+globalThis.DECOY = DECOY;
+globalThis.FEE_BPS = FEE_BPS;
+globalThis.feeBpsFor = feeBpsFor;
+globalThis.SEL = SEL;
+globalThis.sig = sig;
+globalThis.keccak256 = keccak256;
+globalThis.utf8Hex = utf8Hex;
+globalThis.applyFee = applyFee;
+globalThis.encodePreviewFee = encodePreviewFee;
+globalThis.encodeQuoteSingle = encodeQuoteSingle;
+globalThis.encodeSwap = encodeSwap;
+globalThis.hopWord = hopWord;
+globalThis.SWAP_SIG = SWAP_SIG;
+globalThis.TIERS = TIERS;
+globalThis.probeCall = probeCall;
+globalThis.proveChain = proveChain;
+globalThis.viewHome = viewHome;
+globalThis.pad32 = pad32;
+globalThis.addr32 = addr32;
+globalThis.fmt = fmt;
+</script>
+
+<div class="dx-foot">
+  <div class="dx-foot-in">
+    <div class="dx-foot-brand"><a href="../index.html">← DEX fleet</a>
+      <span>truth-only · every number read on-chain</span></div>
+    <nav class="dx-foot-nav" aria-label="All pages"><a href="../subscribe/index.html">Subscriptions</a><a href="../merchant/index.html">For merchants</a><a href="../g2b-escrow/index.html">Escrow</a><a href="../g2a-streams/index.html">Streams</a><a href="../f1a-payment-links/index.html">Payment links</a><a href="../p2-forwarder/index.html">Forwarder</a><a href="../p3-router/index.html">Swap router</a><a href="../g4b-receipts/index.html">Receipts</a><a href="../g3a-sponsorship/index.html">Gasless</a><a href="../f1c-duster/index.html">Dust → USDC</a><a href="../miniapp/index.html">Pay in-feed</a><a href="../fleet-executor/index.html">Executor</a><a href="../status/index.html">Status</a><a href="../security/index.html">Security</a><a href="../changelog/index.html">Changelog</a></nav>
+  </div>
+</div>
+</body>
+</html>
